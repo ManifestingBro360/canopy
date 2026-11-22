@@ -38,6 +38,46 @@ const short = (id) => createHash('sha256').update(String(id)).digest('hex').slic
 // printable, bounded, and inside quotes the receiving model can see.
 export const fence = (s, max = 160) => '\u00ab' + String(s || '').replace(/[^\x20-\x7e]/g, ' ').replace(/[\u00ab\u00bb]/g, '').replace(/\s+/g, ' ').trim().slice(0, max) + '\u00bb';
 
+// The parameters of a signature: [{ name, required }]. A parameter is required
+// when it has no default, is not marked optional and is not a rest parameter.
+function params(sig) {
+  const text = String(sig || '');
+  const open = text.indexOf('(');
+  if (open < 0) return null;
+  const parts = [];
+  let depth = 0, cur = '', closed = false;
+  for (let i = open; i < text.length && !closed; i++) {
+    const ch = text[i];
+    if ('([{<'.includes(ch)) { if (depth++) cur += ch; }
+    else if (ch === '>' && (text[i - 1] === '=' || depth < 2)) cur += ch; // an arrow, or a comparison in a default
+    else if (')]}>'.includes(ch)) { if (--depth === 0) closed = true; else cur += ch; }
+    else if (ch === ',' && depth === 1) { parts.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  if (!closed) return null;
+  if (cur.trim()) parts.push(cur);
+  return parts.map((raw) => {
+    const t = raw.trim();
+    const name = (/^[.*]*([A-Za-z_$][\w$]*)/.exec(t) || [])[1] || t.slice(0, 20);
+    return { name, required: !(t.includes('=') || /^(\.\.\.|\*)/.test(t) || /^[\w$]+\s*\?/.test(t)) && name !== 'self' && name !== 'cls' };
+  });
+}
+
+// One plain sentence on what a signature change means for existing calls, or ''.
+// A reader told only "the signature changed" tends to assume its own call still works.
+export function paramDelta(sigOld, sigNew) {
+  const a = params(sigOld), b = params(sigNew);
+  if (!a || !b) return '';
+  const need = (l) => l.filter((x) => x.required);
+  const added = need(b).filter((x) => !a.some((y) => y.name === x.name));
+  const gone = a.filter((x) => !b.some((y) => y.name === x.name));
+  if (added.length) return `It now requires ${added.length === 1 ? 'a new argument' : added.length + ' new arguments'} with no default (${added.map((x) => fence(x.name, 30)).join(', ')}): a call written for the old form will not work as it is.`;
+  if (need(b).length > need(a).length) return 'An argument that had a default is now required: a call that left it out will not work as it is.';
+  if (gone.length) return `It no longer takes ${gone.map((x) => fence(x.name, 30)).join(', ')}: a call that passes ${gone.length === 1 ? 'it' : 'them'} needs changing.`;
+  if (a.length === b.length && a.some((x, i) => x.name !== b[i].name) && a.every((x) => b.some((y) => y.name === x.name))) return 'Its arguments are in a different order: check every call.';
+  return b.length > a.length ? 'The added arguments are optional: existing calls keep working.' : '';
+}
+
 export class Engine {
   constructor({ repo, common, home, store, pub }) {
     this.repo = repo; this.common = common; this.home = home; this.store = store; this.pub = pub;
@@ -498,8 +538,9 @@ export class Engine {
 
   changeText(node, kind, sigOld, sigNew, branch, why) {
     const what = kind === 'removed' ? 'was removed' : 'changed its signature';
+    const delta = kind === 'removed' ? '' : paramDelta(sigOld, sigNew);
     return `${node} ${what} in an unlanded change on branch ${fence(branch, 60)}. Was ${fence(sigOld)}` + (kind === 'removed' ? '' : `, now ${fence(sigNew)}`) +
-      `. You ${why}. It is not on ${this.main} yet, so code written against either version may need to change before you land.`;
+      `.${delta ? ' ' + delta : ''} You ${why}. It is not on ${this.main} yet, so code written against either version may need to change before you land.`;
   }
 
   // Tell every other worktree whose record touches this change.
