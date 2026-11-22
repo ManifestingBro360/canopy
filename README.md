@@ -11,13 +11,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/OWNER/canopy/actions/workflows/ci.yml"><img src="https://github.com/OWNER/canopy/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
+  <a href="https://github.com/ManifestingBro360/canopy/actions/workflows/ci.yml"><img src="https://github.com/ManifestingBro360/canopy/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
   <img src="https://img.shields.io/badge/dependencies-0-12805C" alt="no dependencies">
   <img src="https://img.shields.io/badge/node-%E2%89%A5%2022.13-12805C" alt="Node 22.13 or later">
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache--2.0-12805C" alt="Apache-2.0"></a>
 </p>
 
-<p align="center"><a href="https://sierraproject.ai/canopy/">Website</a> · <a href="docs/DESIGN.md">Design</a> · <a href="docs/TEST-REPORT.md">Test report</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
+<p align="center"><a href="https://theprojectsierra.ai/canopy/">Website</a> · <a href="docs/DESIGN.md">Design</a> · <a href="docs/TEST-REPORT.md">Test report</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
 
 ![The Canopy map: a repository drawn as blocks, with the branches being worked on and a feed of landings](docs/map.jpg)
 
@@ -77,7 +77,7 @@ No npm dependencies. One Node process. One SQLite file. You need Node 22.13 or
 later and Git 2.38 or later.
 
 ```bash
-git clone https://github.com/OWNER/canopy
+git clone https://github.com/ManifestingBro360/canopy
 cd canopy
 node bin/canopy.mjs demo
 ```

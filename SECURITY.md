@@ -4,7 +4,7 @@
 
 Please do not open a public issue. Use **Security → Report a vulnerability**
 on this repository (GitHub private reporting), or write to
-security@sierraproject.ai. You will get a reply within three working days.
+security@theprojectsierra.ai. You will get a reply within three working days.
 Reporters are credited in `docs/VERIFIER.md` unless they ask not to be.
 
 ## What Canopy claims

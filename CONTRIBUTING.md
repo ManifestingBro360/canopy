@@ -9,7 +9,7 @@ You need Node 22.13 or later and Git 2.38 or later. There is nothing to
 install.
 
 ```bash
-git clone https://github.com/OWNER/canopy
+git clone https://github.com/ManifestingBro360/canopy
 cd canopy
 node bin/canopy.mjs demo        # the live map on http://127.0.0.1:7717
 npm test                        # the whole suite, about five minutes on a laptop

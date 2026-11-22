@@ -15,12 +15,12 @@
   },
   "license": "Apache-2.0",
   "private": true,
-  "homepage": "https://sierraproject.ai/canopy/",
+  "homepage": "https://theprojectsierra.ai/canopy/",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/canopy.git"
+    "url": "git+https://github.com/ManifestingBro360/canopy.git"
   },
-  "bugs": "https://github.com/OWNER/canopy/issues",
+  "bugs": "https://github.com/ManifestingBro360/canopy/issues",
   "keywords": [
     "git",
     "ai-agents",
