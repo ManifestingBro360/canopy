@@ -1,0 +1,31 @@
+name: Adopter request
+description: Add your company, team or product to the adopters page
+title: "Adopter: "
+labels: [adopter]
+body:
+  - type: input
+    id: name
+    attributes: { label: Name as it should appear }
+    validations: { required: true }
+  - type: dropdown
+    id: kind
+    attributes: { label: Listed as, options: [Company, Team, Product] }
+    validations: { required: true }
+  - type: input
+    id: url
+    attributes: { label: Link }
+    validations: { required: true }
+  - type: textarea
+    id: use
+    attributes: { label: How you use it, description: One or two sentences. This may be quoted on the site. }
+    validations: { required: true }
+  - type: textarea
+    id: logo
+    attributes: { label: Logo, description: Attach an SVG, or a PNG at least 400 pixels wide. }
+    validations: { required: true }
+  - type: checkboxes
+    id: ok
+    attributes:
+      label: Confirmation
+      options:
+        - { label: I can speak for this company, team or product and we have the right to share this logo., required: true }

@@ -1,0 +1,239 @@
+# Canopy — architecture as built (v0.1)
+
+Canopy is a layer above Git. Git still stores the code and the team's forge
+still hosts it. Canopy adds three things Git does not have: a live record of
+what each agent read and wrote, a map built from that record, and a landing
+gate that decides what may reach `main`.
+
+This document describes what the code does. The first draft was attacked by
+an independent reviewer before anything was built; `VERIFIER.md` lists what
+they found and what changed because of it.
+
+## 1. Parts
+
+```
+ agent (Claude Code) ──HTTP hooks──▶ canopyd ◀──SSE── map UI (browser)
+        │                              │  ▲
+        │ git commit (own worktree)    │  └── canopy CLI (land, why, status, approve)
+        ▼                              ▼
+   local worktree                canonical repo (bare) + pre-receive verifier
+```
+
+- **canopyd** (`src/server.mjs`) — one Node process, no npm dependencies.
+  HTTP on the loopback address, server-sent events, one SQLite file in WAL
+  mode (`node:sqlite`).
+- **Adapter** — Claude Code HTTP hooks posting straight to canopyd. No client
+  code runs in the agent's process and no process is spawned per tool call.
+- **Indexer** (`src/extract.mjs`, `src/graph.mjs`) — source files to symbols
+  and dependency edges, built from Git objects of `main`.
+- **Engine** (`src/engine.mjs`) — hooks to reads, writes, holds, notices and
+  taint.
+- **Gate** (`src/gate.mjs`) — `canopy land`.
+- **Verifier hook** (`hooks/pre-receive.mjs`) — refuses any route into `main`
+  other than a signed landing.
+- **Map UI** (`ui/index.html`) — one static page, plain Canvas, no libraries.
+
+## 2. The record
+
+In-flight state is keyed by **worktree**, because a change belongs to a
+branch, not to whichever session happens to be attached to it. Sessions come
+and go; the record stays until the branch lands or is released.
+
+| Table | Holds |
+|---|---|
+| `reads` | worktree, node, body hash at read time, strength (full or weak) |
+| `writes` | worktree, node, change kind (`signature`, `body`, `added`, `removed`), how it was seen (`hook` or `shell`), old and new signature |
+| `refs` | identifiers used by code the worktree has written |
+| `holds` | node, worktree |
+| `notices` | target worktree, node, source, severity, text, delivered, open |
+| `taint` | worktree, source of outside content |
+| `tainted_nodes` | nodes last landed from a tainted branch without review |
+| `landings`, `landed_nodes` | every verdict and its full record; which nodes each landing changed |
+| `events` | append-only, hash-chained log; its head hash is written into each signed landing record |
+
+A node is `path#name` for a symbol and `path` for a file. Every file is a
+node, so languages the extractor does not parse still work at file level.
+
+## 3. Indexing
+
+The extractor finds functions, classes, methods, types and top-level
+constants in JavaScript, TypeScript, Python and Go with line-anchored patterns
+and brace or indent matching. Each symbol gets a signature hash and a body
+hash, so a change is classified as `signature` or `body`.
+
+An edge `A → B` exists when A's body names B and one of these holds: same
+file, A's file imports B's file, or B's name is unique among top-level symbols
+on `main`. This over-approximates on purpose: the cost is noise. It is not
+complete: dynamic dispatch, re-exports and non-code dependencies are missed.
+
+The graph is built from Git blobs, cached per blob, and rebuilt incrementally
+when `main` moves. The extractor sits behind one function so a tree-sitter or
+language-server backend can replace it.
+
+## 4. What each hook does
+
+| Hook | Action |
+|---|---|
+| `SessionStart` | Register the session. Re-open undelivered high notices. Return a short context block: how to land, what else is in flight. |
+| `UserPromptSubmit` | Record the first prompt as the session's task. |
+| `PostToolUse` Read | Record a read of every symbol the lines cover (full when at least 80% of the symbol was read). On first entry to a section, attach that section's rules, what others are changing in that file, and the intent of its last three landings. Inherit taint if the file was last landed unreviewed from a tainted branch. |
+| `PostToolUse` Grep, Glob | Weak reads for the files named in the results. |
+| `PostToolUse` Bash | Taint if the command can fetch outside content. Then scan the worktree for files the command changed and run them through the same path as an edit. |
+| `PostToolUse` WebFetch, WebSearch, `mcp__*` | Taint the worktree with the source. |
+| `PreToolUse` Edit, Write, MultiEdit, NotebookEdit | If another branch has an unlanded change to a function this edit touches: deny once, with who, and how to wait or proceed. A second attempt is allowed with a warning. File-level and stale holds only warn. |
+| `PostToolUse` Edit, Write, … | Compare the file with `main`, classify each changed symbol, record writes and holds, fan out notices, retract notices for anything reverted. |
+| every hook above | Deliver the worktree's pending notices as `additionalContext`. |
+
+If canopyd is unreachable the hooks fail open: the agent keeps working and
+nothing is recorded. Coordination is advisory; the gate is the control and it
+fails closed. Work done while the daemon was down shows up at the gate as
+unwitnessed writes.
+
+## 5. Collision handling
+
+1. **Presence.** Reads and writes are visible on the map, in `canopy status`,
+   and in the context an agent gets when it reads a file others are changing.
+2. **Hold.** A hold lasts as long as the change is unlanded. The first
+   conflicting edit to a held function is refused with an explanation and a
+   `canopy wait` command; a retry goes through and both sides are told.
+   Deny-once cannot deadlock or loop. A holder idle for 30 minutes only warns.
+3. **Notice.** When a branch changes a symbol in its working tree, before any
+   commit:
+   - signature changed or symbol removed → notify every other worktree that
+     read it, references it in code it has written, or is changing something
+     that depends on it (high);
+   - body changed → notify worktrees that fully read it (low).
+   The reverse also fires: writing code that calls a symbol another branch is
+   changing produces a notice to the writer. High notices stay open until
+   retracted or landed and are re-sent after a restart or compaction.
+4. **At the gate.** Anything the first three missed is caught by running the
+   checks on the merged commit, and the record lists what changed on `main`
+   since the branch forked that the branch had read or referenced.
+
+Notice text is built from structured fields. Text that originates from another
+agent's work (branch names, signatures, intent) is reduced to printable
+characters, cut to a fixed length, and placed inside quotation marks under a
+line that tells the receiving model it is data.
+
+## 6. The landing gate
+
+`canopy land` asks canopyd to judge the branch in the caller's worktree.
+
+1. **Write set from Git.** Diff the branch against its merge base, re-extract
+   both versions, list changed symbols and files. Renames count as removal at
+   the old path and addition at the new one.
+2. **Blast radius.** Dependents of the write set on `main`'s graph: one hop
+   for body changes, two for signature changes and removals.
+3. **Inspection coverage.** The share of the blast radius the branch fully
+   read, where the read is still fresh against `main`. The unread nodes are
+   listed.
+4. **Stale assumptions.** Landings since the fork that changed a signature the
+   branch read, references, or calls in the code it changed (the calls are
+   taken from the diff itself). If the branch's own code uses what changed,
+   the landing is refused until the branch merges `main`: a test may not
+   cover a call the agent just wrote.
+5. **Unwitnessed writes.** Changed files with no recorded agent activity.
+   They also count as taint.
+6. **Rules** from `main` (section 7). Rules for both old and new paths of a
+   rename apply.
+7. **Merge.** `git merge-tree` builds the merge of `main` and the branch
+   without touching a working tree. A conflict blocks with the file list.
+8. **Checks.** The section's commands run on that exact merge commit in a
+   scratch worktree, inside a sandbox. Only canopyd runs checks; a result
+   reported by a client is never used.
+9. **Verdict.** `blocked` (checks, conflict, invalid rules), `needs-human`
+   (protected files, taint in a section that forbids it, reduced tests,
+   coverage or size below the section's bar), or land.
+10. **Commit phase, one landing at a time.** If `main` moved while checks ran,
+    the merge is rebuilt on the new `main` and the checks run again. A landing
+    that arrives while another is in progress skips the early run and runs
+    its checks once, in its turn, so a busy queue costs one run per landing.
+    With `revalidate: "disjoint"` the early run is kept and the re-run is
+    skipped when nothing that landed meanwhile touches this change's write
+    set, blast radius, files, or anything its changed code reads or calls;
+    the record says so.
+11. **Sign and land.** The record names the merge commit, its tree, its
+    parents and the commit `main` is moving from. canopyd signs it with
+    Ed25519, stores it as a Git note on the merge commit, pushes `main` and
+    the notes ref atomically if a canonical remote is configured, and
+    fast-forwards the local `main`.
+
+Every landing is exactly one first-parent commit on `main`.
+
+A person approves a `needs-human` landing with `canopy approve <id>` or in the
+UI. The approval is bound to the branch commit and the rules hash: if either
+changes, it must be given again.
+
+## 7. Rules
+
+`.canopy/rules.json` on `main`. Every rule whose path is a prefix of a changed
+file applies. Checks are unioned, minimum coverage takes the highest value,
+size limits take the lowest, and `protected` and `no_tainted` are OR-ed. A
+deeper section cannot loosen a parent. Files that decide how code is built,
+tested, shipped or how agents are configured are protected by default, and so
+is removing lines from existing tests.
+
+## 8. Trust and security
+
+- **Canonical repository.** The `pre-receive` hook accepts an update of
+  `main` only if it is a fast-forward and every new first-parent commit has a
+  note that verifies against the trusted public key and names that commit,
+  its tree, and the previous commit as its base. Notes are read from the
+  incoming push. The notes ref can only gain entries.
+- **Checks are sandboxed.** On macOS, `sandbox-exec` denies reading
+  canopyd's home (key, token, database) and common credential folders. Writes
+  are allowed only inside the scratch checkout, a temp directory created for
+  that run, Git's object store and package caches; so refs, hooks, config,
+  the home directory and other working trees cannot be touched. Outside
+  network and canopyd's own port are denied. On Linux
+  a `bwrap` wrapper is used when present; that path is untested. If neither
+  exists, the record says `sandbox: none`.
+- **Taint.** Outside content restricts what a branch may land without a
+  person, per section. Unreviewed tainted landings mark their nodes, so a
+  later clean session that reads them inherits the taint.
+- **API.** Loopback only. Requests with a foreign `Host` or `Origin` are
+  refused, and POST bodies must be JSON, so a web page cannot drive it.
+  Optional bearer token. Approval needs a separate token.
+- **Two modes.** In team mode canopyd and the canonical repository run away
+  from the agents and the controls are enforced. In local mode everything
+  runs as one user and the controls guard against mistakes only.
+- **Trust tier.** Reads are `hook-reported`. They are used to route work to a
+  person and to target notices. No security decision rests on them alone.
+
+- **Git is the truth.** On start, and whenever `main` moves by a route other
+  than a landing made here, canopyd imports landings it has no row for from
+  their signed notes and releases the holds of branches already on `main`.
+- **Rules are validated strictly** (section 7). A file that is wrong in any
+  way is refused whole.
+
+## 9. Context
+
+- `canopy why <path>[#symbol]` returns the landings that touched it: intent,
+  coverage, checks, who approved.
+- On first reading in a section an agent receives that section's rules,
+  in-flight changes to that file, and the intent of its last three landings.
+
+## 10. Map UI
+
+One screen. The repository is a treemap on a plane, drawn in orthographic 3D:
+directories are districts, files are blocks, height grows with file size. A
+block takes a branch's colour while that branch has an unlanded change in it
+and splits into two colours when two branches do. A ring marks a recent read.
+A dashed arc joins a change to the work it reaches. Panels list the branches
+being worked on and a feed of landings and high notices; clicking a block
+shows its rules, who is changing it and why it is the way it is. Drag to
+turn, scroll to zoom, one button flattens it to 2D.
+
+## 11. Known limits
+
+- The extractor is pattern-based.
+- Dependencies that are not code references are invisible.
+- Reads are hook-reported.
+- Landings are serialised in the commit phase; with `revalidate: "always"`
+  throughput is one check run per landing, like a serial merge queue.
+- Each landing costs about 0.6 s besides its checks, and the dependency graph
+  is re-linked in full when `main` moves (about 1 s at 10,000 files).
+- When two sessions share a worktree, only the first to act receives a notice.
+- Only the Claude Code adapter exists.
+- Hosted forges cannot run the `pre-receive` hook; there Canopy must be the
+  only identity allowed to push to `main`.
