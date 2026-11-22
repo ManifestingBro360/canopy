@@ -448,7 +448,9 @@ export class Engine {
       if (cur) for (const sym of cur.ex.symbols) if (next.has(nodeId(rel, sym.name))) this.know(c.wt, nodeId(rel, sym.name), sym.bodyHash, now);
       const st = cur ? cur.stamp : 'gone';
       // The content as last seen, so the gate can tell if what was committed is something else.
-      const oid = cur && cur.text ? blobOid(cur.text) : '';
+      // Always a real hash while the file exists: an empty value would mean "not seen" at the gate.
+      // A file too large to have been read into memory is hashed by Git.
+      const oid = !cur ? '' : Number(cur.stamp.split(':')[1]) >= 2_000_000 ? tryGit(c.wt, ['hash-object', '--', rel]) || '' : blobOid(cur.text);
       s.run('insert into wtfiles(worktree, path, stamp, seen_blob) values(?,?,?,?) on conflict(worktree, path) do update set stamp=excluded.stamp, seen_blob=excluded.seen_blob', c.wt, rel, st, oid);
     });
 

@@ -606,6 +606,19 @@ test('notifications: approvals and security events reach the right channel in it
   assert.match(loadRules(mkRepo({ 'a.js': '1\n' }, rules({ notify: [{ channel: 'https://hooks.slack.com/x' }] })), 'HEAD').error, /never in this file/);
 });
 
+test('record: empty and very large files count as witnessed when edited through a session, and not when changed afterwards', async () => {
+  await world(7925, rules({}, [{ path: '', no_unwitnessed: true }]), {}, async ({ agent }) => {
+    const a = agent(null); await a.start();
+    await a.write('lib/empty.txt', ''); await a.write('lib/big.bin', 'x'.repeat(2_100_000)); a.commit();
+    const l = await a.land();
+    assert.equal(l.status, 'landed', JSON.stringify(l.reasons)); assert.deepEqual(l.record.unwitnessed, []);
+    const b = agent(null); await b.start(); await b.write('lib/note.txt', 'seen\n');
+    fs.writeFileSync(path.join(b.wt, 'lib/note.txt'), 'changed with no session watching\n'); b.commit();
+    const l2 = await b.land();
+    assert.equal(l2.status, 'needs-human'); assert.deepEqual(l2.record.unwitnessed, ['lib/note.txt']);
+  });
+});
+
 // ---- rules and compatibility --------------------------------------------
 
 test('rules: a mistake in the new keys refuses the whole file with the reason', () => {
