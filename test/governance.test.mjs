@@ -268,20 +268,38 @@ test('manager: block blocks, concern and garbage and silence ask for a person, a
   fs.writeFileSync(stub, `import fs from 'node:fs';
 let t = ''; for await (const c of process.stdin) t += c;
 const d = JSON.parse(t); fs.writeFileSync(${JSON.stringify(seen)}, t);
+// A manager that has been talked into misbehaving: try to read canopyd's key and write into its state.
+const K = fs.readFileSync(${JSON.stringify(path.join(dir, 'home.txt'))}, 'utf8');
+let stole = 'no'; try { stole = fs.readFileSync(K + '/key.pem', 'utf8').slice(0, 20); } catch (e) { stole = 'denied'; }
+try { fs.writeFileSync(K + '/leak', 'x'); } catch {}
+fs.writeFileSync(${JSON.stringify(seen)} + '.key', stole);
 const say = (v) => console.log(JSON.stringify({ verdict: v, summary: v + ' because ' + d.intent, model: 'stub-1', findings: [{ severity: 'high', file: 'lib/util.js', note: 'look here' }] }));
 if (/BLOCK/.test(d.intent)) say('block'); else if (/CONCERN/.test(d.intent)) say('concern');
 else if (/GARBAGE/.test(d.intent)) console.log('I think it is fine {"verdict":"approve"}');
 else if (/SLOW/.test(d.intent)) await new Promise((r) => setTimeout(r, 8000)); else if (/EXIT/.test(d.intent)) process.exit(3); else say('pass');
 `);
   const doc = rules({ manager: { cmd: `node ${stub}`, when: 'always', timeout_ms: 1500 } });
-  await world(7911, doc, {}, async ({ d, agent, port }) => {
+  await world(7911, doc, {}, async ({ repo, d, agent, port }) => {
+    fs.writeFileSync(path.join(dir, 'home.txt'), path.join(repo, '.git', 'canopy'));
     const go = async (intent, text) => { const a = agent(null); await a.start(); await a.write('lib/util.js', FILES['lib/util.js'] + text); a.commit(); return a.land(intent); };
     const pass = await go('tidy', '// a\n');
     assert.equal(pass.status, 'landed'); assert.equal(pass.record.manager.verdict, 'pass'); assert.equal(pass.record.manager.model, 'stub-1');
     const dossier = JSON.parse(fs.readFileSync(seen, 'utf8'));
     assert.ok(dossier.diff.includes('+// a') && dossier.write_set.length && dossier.intent === 'tidy' && Array.isArray(dossier.authors));
     const block = await go('BLOCK it', '// b\n');
-    assert.equal(block.status, 'blocked'); assert.match(block.reasons[0], /manager refused.*look here/);
+    assert.equal(block.status, 'blocked'); assert.match(block.reasons[0], /manager refused this change about lib\/util\.js \[high\]/);
+    // Its words stay with the people who decide; they are not handed back to whoever asked.
+    assert.ok(!JSON.stringify(block).includes('look here') && !JSON.stringify(block).includes('because BLOCK'));
+    assert.equal(block.record.manager.summary, undefined);
+    const notes = async (token) => (await httpJson(port, 'POST', '/api/concerns', { id: block.id, token })).json;
+    assert.equal((await notes('nope')).status, 'error');
+    const seenBy = await notes(d.humanToken());
+    assert.equal(seenBy.summary, 'block because BLOCK it'); assert.equal(seenBy.findings[0].note, 'look here');
+    assert.ok(!gitOk(repo, 'notes', '--ref=canopy', 'show', pass.commit).includes('pass because'), 'nor into the signed record');
+    if (process.platform === 'darwin') {
+      assert.equal(fs.readFileSync(seen + '.key', 'utf8'), 'denied', 'the manager cannot read the signing key');
+      assert.ok(!fs.existsSync(path.join(repo, '.git', 'canopy', 'leak')), 'or write into canopyd\'s state');
+    }
     for (const [intent, re] of [['CONCERN here', /manager raised concerns/], ['GARBAGE out', /no usable verdict/], ['SLOW one', /did not answer within/], ['EXIT now', /exited with 3/]]) {
       const r = await go(intent, `// ${intent}\n`);
       assert.equal(r.status, 'needs-human', intent); assert.match(r.reasons.join(' '), re);

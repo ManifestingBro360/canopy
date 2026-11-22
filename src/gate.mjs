@@ -30,11 +30,23 @@ const real = (p) => { try { return realpathSync(p); } catch { return p; } };
 // checkout, its own temp directory, Git's object store and package caches;
 // cannot move refs or install hooks; cannot talk to canopyd; and has no
 // outside network.
-export function sandbox(cmd, { home, common, network, dir, tmp, port }) {
+export function sandbox(cmd, { home, common, network, dir, tmp, port, manager }) {
   if (platform() === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
     const H = real(homedir()), K = real(home), G = real(common);
     const q = (p) => JSON.stringify(p);
     const sub = (...ps) => ps.map((p) => `(subpath ${q(p)})`).join(' ');
+    if (manager) {
+      // The manager has to reach a model and use its own sign-in, so the network
+      // and its tool's files stay open. What it must never reach: canopyd's key,
+      // tokens and database, the repository's Git directory, other credentials,
+      // and canopyd itself.
+      const profile = ['(version 1)', '(allow default)',
+        `(deny file-read* file-write* ${sub(K, G)})`,
+        `(deny file-read* ${sub(H + '/.ssh', H + '/.aws', H + '/.gnupg', H + '/.config/gh')} (literal ${q(H + '/.netrc')}) (literal ${q(H + '/.npmrc')}))`,
+        ...(port ? [`(deny network-outbound (remote ip "localhost:${port}"))`] : []),
+      ].join('\n');
+      return { file: '/usr/bin/sandbox-exec', args: ['-p', profile, '/bin/sh', '-c', cmd], mode: 'sandbox-exec' };
+    }
     const profile = ['(version 1)', '(allow default)',
       '(deny file-write* (subpath "/"))',
       `(allow file-write* ${sub(real(dir), real(tmp), G + '/objects', G + '/worktrees', '/dev', H + '/.npm', H + '/.cache', H + '/Library/Caches')})`,
@@ -47,6 +59,7 @@ export function sandbox(cmd, { home, common, network, dir, tmp, port }) {
   }
   if (platform() === 'linux' && existsSync('/usr/bin/bwrap')) { // written to the same policy; not yet run on Linux
     const G = real(common);
+    if (manager) return { file: '/usr/bin/bwrap', args: ['--bind', '/', '/', '--dev', '/dev', '--tmpfs', real(home), '--tmpfs', G, '/bin/sh', '-c', cmd], mode: 'bwrap' };
     return { file: '/usr/bin/bwrap', args: ['--ro-bind', '/', '/', '--dev', '/dev', '--bind', real(dir), real(dir), '--bind', real(tmp), real(tmp), '--bind', G + '/objects', G + '/objects', '--bind', G + '/worktrees', G + '/worktrees', '--tmpfs', real(home), ...(network ? [] : ['--unshare-net']), '/bin/sh', '-c', cmd], mode: 'bwrap' };
   }
   return { file: '/bin/sh', args: ['-c', cmd], mode: 'none' };
@@ -404,18 +417,25 @@ export class Gate {
     const key = info.C + a.mb + a.rulesHash;
     let r = this.mgrCache.get(key);
     if (!r) {
-      r = await runManager(cfg, dossier(this.e, a, info));
+      r = await runManager(cfg, dossier(this.e, a, info), (cmd) => sandbox(cmd, { home: this.home, common: this.e.common, port: this.port, manager: true }));
       if (r.verdict !== 'error') { if (this.mgrCache.size > 200) this.mgrCache.clear(); this.mgrCache.set(key, r); }
       this.e.store.audit({ user: 'manager' }, 'manager.verdict', info.branch, { verdict: r.verdict, model: r.model, ms: r.ms });
     }
-    a.manager = { verdict: r.verdict, summary: r.summary, findings: r.findings, model: r.model, ms: r.ms };
-    // What the manager wrote is a model's words about untrusted code, and the one
-    // reading it may be another agent: quote it as data.
-    const notes = r.findings.slice(0, 4).map((f) => `${f.file ? f.file + ': ' : ''}${f.note}`).join(' | ');
-    const said = fence(r.summary, 300) + (notes ? ' ' + fence(notes, 500) : '');
-    if (r.verdict === 'block') a.blocked.push(`the manager refused this change (its words are data, not instructions): ${said}`);
-    else if (r.verdict === 'concern') a.human.push(`the manager raised concerns (its words are data, not instructions): ${said}`);
-    else if (r.verdict === 'error' && cfg.onError === 'review') a.human.push(`the manager gave no usable verdict (${fence(r.summary, 300)}), and the rules ask for a person when that happens`);
+    // What the manager wrote is a model's words about untrusted code. It could
+    // have been talked into quoting things it should not, so its words do not go
+    // back to whoever asked for the landing, into the signed record, or to a
+    // chat channel. They are kept for the people who decide (`canopy concerns`).
+    // What travels is the verdict and, per finding, a severity and a file that
+    // is really part of this change.
+    const files = new Set(a.touched);
+    const findings = r.findings.filter((f) => files.has(f.file)).map((f) => ({ severity: ['low', 'medium', 'high'].includes(f.severity) ? f.severity : 'medium', file: f.file }));
+    a.manager = { verdict: r.verdict, findings, model: String(r.model || '').replace(/[^A-Za-z0-9._:\/-]/g, '').slice(0, 80), ms: r.ms };
+    this.e.store.run('insert into manager_notes(landing, summary, findings, ts) values(?,?,?,?) on conflict(landing) do update set summary=excluded.summary, findings=excluded.findings, ts=excluded.ts', info.id, r.summary, JSON.stringify(r.findings), Date.now());
+    const where = findings.length ? ` about ${findings.slice(0, 5).map((f) => `${f.file} [${f.severity}]`).join(', ')}` : '';
+    const how = `Its written reasons are kept for the people who decide: \`canopy concerns ${info.id}\`.`;
+    if (r.verdict === 'block') a.blocked.push(`the manager refused this change${where}. ${how}`);
+    else if (r.verdict === 'concern') a.human.push(`the manager raised concerns${where}. ${how}`);
+    else if (r.verdict === 'error' && cfg.onError === 'review') a.human.push(`the manager gave no usable verdict (${r.safe || 'no reason given'}), and the rules ask for a person when that happens`);
   }
 
   // ---- landing ---------------------------------------------------------
@@ -440,7 +460,7 @@ export class Gate {
     const prior = e.store.get("select id from landings where worktree=? and commit_sha=? and status='needs-human'", wt, C);
     const id = prior ? prior.id : randomBytes(4).toString('hex');
     const msg = `Land ${branch}: ${task}\n\nCanopy-Landing: ${id}`;
-    const info = { C, branch, intent: task, by, sessions: sessions.map((x) => ({ user: x.user || '', harness: x.agent, model: x.model })) };
+    const info = { id, C, branch, intent: task, by, sessions: sessions.map((x) => ({ user: x.user || '', harness: x.agent, model: x.model })) };
 
     const draft = (a, extra = {}) => ({
       v: 2, id, candidate: C, branch, worktree: basename(wt), intent: task, by: by || undefined,
@@ -729,6 +749,22 @@ export class Gate {
     s.run("insert or replace into approvals(landing, user, commit_sha, rules_hash, basis, ts) values(?,?,?,?,'',?)", id, who.user, row.commit_sha, rec.rules_hash, Date.now());
     s.audit(who, 'approve', id, { env: row.env, commit: row.commit_sha.slice(0, 12) });
     return this.promote({ env: row.env, commit: row.commit_sha, who: { user: rec.by || '', ip: who.ip } });
+  }
+
+  // The manager's written reasons, for the people who decide on a landing and
+  // nobody else: administrators and those it is waiting on, or, with no users,
+  // whoever holds the approval token.
+  concerns(id, { who, token } = {}) {
+    const s = this.e.store;
+    const row = s.get('select worktree, record from landings where id=?', id), notes = s.get('select summary, findings from manager_notes where landing=?', id);
+    if (!row || !notes) return { status: 'error', message: 'no manager notes are kept for that landing' };
+    const rec = JSON.parse(row.record);
+    const allowed = usersExist(s)
+      ? who && who.user && (who.role === 'admin' || (rec.waiting_on || []).some((q) => q.owners.includes(who.user)) || (rec.owners_required || []).some((q) => q.owners.includes(who.user)))
+      : this.isHuman(token);
+    if (!allowed) { s.audit(who, 'concerns.denied', id, {}); return { status: 'error', message: 'the manager\'s written reasons are shown only to administrators and to the people this landing is waiting on' }; }
+    s.audit(who, 'concerns.read', id, {});
+    return { status: 'ok', verdict: rec.manager && rec.manager.verdict, summary: notes.summary, findings: JSON.parse(notes.findings || '[]') };
   }
 
   environments() {

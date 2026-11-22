@@ -42,14 +42,21 @@ Reporters are credited in `docs/VERIFIER.md` unless they ask not to be.
   database directly. Whoever can write that directory is the operator.
 - **No transport security.** canopyd speaks plain HTTP on the loopback
   address. Tokens are protected by that, not by encryption.
-- **The manager reads untrusted code.** Its verdict cannot loosen anything,
-  and what it writes is shown as quoted data, but its opinion can be steered by
-  text in a diff. It is a second opinion, not a control. The Claude Code
-  adapter switches tools off and the OpenAI-compatible adapter is a plain
-  completion. **Codex cannot run without tools**: its adapter uses the
-  read-only sandbox and an empty directory, which stops writes but not
-  commands that read what canopyd's account can read. Do not use the Codex
-  adapter on a repository that takes changes from sources you do not trust.
+- **The manager reads untrusted code.** Its opinion can be steered by text in
+  a diff, so it is a second opinion, not a control, and it is contained rather
+  than trusted: its verdict cannot loosen anything; it runs in an empty
+  directory inside a sandbox that cannot read canopyd's key, tokens or
+  database, the repository's Git directory, or SSH, cloud and GitHub
+  credentials, and cannot reach canopyd; and what it writes is kept for
+  administrators and the people a landing is waiting on, never returned to
+  whoever asked for the landing, never signed into Git, never posted to a
+  channel. The Claude Code adapter switches tools off and the OpenAI-compatible
+  adapter is a plain completion. **Codex cannot run without tools.** Inside the
+  sandbox it can still read other files canopyd's account can read, including
+  its own sign-in. The sandbox exists on macOS; the Linux profile is untested,
+  and with neither there is none. Do not use the Codex adapter where there is
+  no sandbox, or on a repository that takes changes from sources you do not
+  trust.
 - **Reported reads are not proof.** They come from the harness. No security
   decision rests on them alone.
 - **The Linux sandbox is untested.** If no sandbox is available the landing

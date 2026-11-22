@@ -39,6 +39,7 @@ create table if not exists authors(worktree text, path text, session text, user 
 create table if not exists promotions(id text primary key, env text, commit_sha text, status text, record text, ts int);
 create table if not exists channels(name text primary key, url text, kind text, created int);
 create table if not exists notified(key text primary key, ts int);
+create table if not exists manager_notes(landing text primary key, summary text, findings text, ts int);
 create table if not exists known(worktree text, node text, hash text, ts int, primary key(worktree, node));
 create table if not exists audit(seq integer primary key, ts int, user text, ip text, action text, target text, detail text, hash text);
 `;

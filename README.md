@@ -194,6 +194,7 @@ When the work is committed, the agent (or you) runs `canopy land`.
 | `canopy status` | Who is changing what, and open notices |
 | `canopy land [--task "..."] [--json]` | Judge this branch and land it. Exit 0 landed, 2 needs a person, 1 blocked |
 | `canopy pending` / `canopy approve <id>` | Landings waiting for a person |
+| `canopy concerns <id>` | What the manager wrote about a held or refused landing. Shown only to administrators and the people it is waiting on |
 | `canopy why <path>[#symbol]` | The landings that made this code what it is |
 | `canopy wait '<path>#<symbol>'` | Block until another agent's change to it lands |
 | `canopy release` | Drop this worktree's holds and in-flight record |
@@ -338,10 +339,15 @@ Canopy calls no model itself: the adapters in `managers/` wrap Claude Code
 (Ollama, vLLM, LM Studio, hosted gateways), so open-source models work the
 same way. They take `CANOPY_MANAGER_MODEL`, `CANOPY_MANAGER_URL` and
 `CANOPY_MANAGER_KEY` from canopyd's environment. The adapters have been tested
-with stand-in commands, not against live models. The manager runs in an empty
-directory, never in the repository. The Claude Code and OpenAI-compatible
-adapters give the model no tools; Codex cannot be run that way, so its adapter
-is for repositories whose contributors you trust (see SECURITY.md).
+with stand-in commands, not against live models. The manager is contained, not
+trusted. It runs in an empty directory inside a sandbox that cannot read
+canopyd's key, tokens or database, the repository's Git directory, or SSH,
+cloud and GitHub credentials (macOS; the Linux profile is untested). What it
+writes never goes back to whoever asked for the landing, into the signed
+record, or to a chat channel: they see the verdict and which files it was
+about, and the people who decide read the rest with `canopy concerns <id>`.
+The Claude Code and OpenAI-compatible adapters also give the model no tools.
+Codex cannot be run that way; see SECURITY.md before using its adapter.
 
 **Catching up.** Canopy remembers which version of each function a worktree
 last read in full or wrote. When others land changes to those functions, the

@@ -125,13 +125,19 @@ someone else lands it; an owner can approve such reasons only when the whole
 change lies inside owned sections, so a trivial edit elsewhere cannot recruit
 an approver; a repository-wide owner is no longer described as "a person".
 
-A separate automated security review flagged the Codex manager adapter: Codex
-cannot run with its tools switched off, so a diff under review could try to
-talk the manager model into running commands. The manager now runs in an empty
-directory, never in the repository; the adapter asks for the read-only
-sandbox; and its header, the README and `SECURITY.md` say plainly that it is
-for repositories whose contributors are trusted. The manager's words are shown
-as quoted data wherever they appear.
+A separate automated security review flagged the Codex manager adapter twice:
+Codex cannot run with its tools switched off, so a diff under review could try
+to talk the manager model into reading files on the Canopy host, and the
+manager's summary, shown to whoever asked for the landing, could then carry
+them out. Both ends were closed. Every manager now runs in an empty directory
+inside a sandbox that cannot read canopyd's key, tokens or database, the Git
+directory, or common credential stores (a test has a stand-in manager try to
+read the signing key and write into canopyd's state; both fail). And the
+manager's words no longer travel: the requester, the signed record and chat
+channels get the verdict and the files concerned, and the text is read with
+`canopy concerns` by administrators and the people the landing waits on. What
+remains is stated in `SECURITY.md`: inside the sandbox Codex can still read
+other files of canopyd's account, and the sandbox is macOS-only so far.
 
 One behaviour changed on purpose and is not a defect: landing notices now say
 who landed the change and why (the stated purpose), so the receiving agent can

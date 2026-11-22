@@ -2,6 +2,10 @@
 // team's choosing. Canopy calls no model itself. It hands a dossier to the
 // command named in the rules on main and reads one JSON verdict back.
 //
+// The manager is contained, not trusted: it runs in an empty directory inside
+// a sandbox that cannot read canopyd's secrets, and what it writes is kept
+// for the people who decide, not sent back to whoever asked for the landing.
+//
 // The manager can only tighten. "block" refuses the landing, "concern" sends
 // it to a person, and anything else, including no answer or nonsense, never
 // turns a refusal into a landing. Its input is untrusted code, so adapters run
@@ -30,10 +34,11 @@ export function dossier(e, a, { C, branch, intent, by, sessions }) {
 }
 
 // -> { verdict: 'pass' | 'concern' | 'block' | 'error', summary, findings, model, ms }
-export function runManager(cfg, input) {
+export function runManager(cfg, input, wrap) {
   return new Promise((resolve) => {
     const t0 = performance.now();
-    const fail = (why) => resolve({ verdict: 'error', summary: why, findings: [], ms: Math.round(performance.now() - t0) });
+    // `safe` is Canopy's own account of what went wrong; `detail` may contain the manager's output and stays in the notes.
+    const fail = (safe, detail = '') => resolve({ verdict: 'error', safe, summary: safe + (detail ? ': ' + detail : ''), findings: [], ms: Math.round(performance.now() - t0) });
     let child, cwd;
     // Never in the repository: the adapter and the model get the dossier, not a checkout.
     try { cwd = mkdtempSync(join(tmpdir(), 'canopy-manager-')); } catch (err) { return fail('could not make a working directory for the manager: ' + err.message); }
@@ -41,7 +46,9 @@ export function runManager(cfg, input) {
     const env = { PATH: process.env.PATH, HOME: homedir(), LANG: process.env.LANG || 'C.UTF-8' };
     // Model credentials and settings reach the adapter only under these names.
     for (const [k, v] of Object.entries(process.env)) if (/^(CANOPY_MANAGER_|ANTHROPIC_|OPENAI_|CLAUDE_|CODEX_)/.test(k)) env[k] = v;
-    try { child = spawn('/bin/sh', ['-c', cfg.cmd], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true }); } catch (err) { tidy(); return fail('could not start the manager: ' + err.message); }
+    // In a sandbox that cannot read canopyd's key, tokens or database (see sandbox() in gate.mjs).
+    const sb = wrap ? wrap(cfg.cmd) : { file: '/bin/sh', args: ['-c', cfg.cmd] };
+    try { child = spawn(sb.file, sb.args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true }); } catch (err) { tidy(); return fail('could not start the manager: ' + err.message); }
     let out = '', err = '';
     child.stdout.on('data', (d) => { out = (out + d).slice(-400_000); });
     child.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
@@ -49,7 +56,7 @@ export function runManager(cfg, input) {
     child.on('error', (e2) => { clearTimeout(timer); tidy(); fail('could not start the manager: ' + e2.message); });
     child.on('close', (code) => {
       clearTimeout(timer); tidy();
-      if (code !== 0) return fail(`the manager exited with ${code}: ${clean(err, 300)}`);
+      if (code !== 0) return fail(`the manager exited with ${code}`, clean(err, 300));
       // The verdict is the last line of output that is a JSON object.
       let v = null;
       for (const line of out.trim().split('\n').reverse()) { try { const x = JSON.parse(line); if (x && typeof x === 'object' && !Array.isArray(x)) { v = x; break; } } catch { /* not this line */ } }

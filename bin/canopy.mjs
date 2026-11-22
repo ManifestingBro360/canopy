@@ -46,7 +46,7 @@ function printLanding(r) {
   if (rec.note) console.log('  note: ' + rec.note);
   if (rec.by) console.log(`  landed by: ${rec.by}` + ((rec.approvals || []).length ? `   approved by: ${rec.approvals.map((x) => x.user).join(', ')}` : ''));
   if (rec.authors && rec.authors.length) console.log('  written by: ' + rec.authors.map((x) => `${x.user || 'unknown person'} with ${x.model || 'unknown model'} (${x.harness || '?'})`).join('; '));
-  if (rec.manager) console.log(`  manager: ${rec.manager.verdict}${rec.manager.model ? ' (' + rec.manager.model + ')' : ''} - ${rec.manager.summary}`);
+  if (rec.manager) console.log(`  manager: ${rec.manager.verdict}${rec.manager.model ? ' (' + rec.manager.model + ')' : ''}${(rec.manager.findings || []).length ? ' - ' + rec.manager.findings.map((f) => `${f.file} [${f.severity}]`).join(', ') : ''}`);
   for (const f of rec.advisories || []) console.log(`  advisory: ${f.package}@${f.version} ${f.id}${f.severity ? ' [' + f.severity + ']' : ''}${f.fixed.length ? ', fixed in ' + f.fixed[0] : ''}${f.summary ? ' - ' + f.summary : ''}`);
   if (rec.advisory_status && rec.advisory_status.startsWith('unavailable')) console.log('  advisories: ' + rec.advisory_status);
   if (rec.write_set) {
@@ -192,6 +192,19 @@ const commands = {
     const r = await api('POST', '/api/approve', { id, token, by: flag('by') || process.env.USER || 'human' });
     if (flag('json')) console.log(JSON.stringify(r, null, 2)); else printLanding(r);
     process.exit(r.status === 'landed' || r.status === 'promoted' ? 0 : r.status === 'needs-human' ? 2 : 1);
+  },
+
+  // What the manager wrote about a held or refused landing. For the people who decide on it.
+  async concerns() {
+    const p = await ctx();
+    const id = positional[0];
+    if (!id) { console.error('usage: canopy concerns <landing-id>'); process.exit(1); }
+    let token = process.env.CANOPY_HUMAN_TOKEN;
+    if (!token) { try { token = readFileSync(join(p.home, 'human.token'), 'utf8').trim(); } catch { /* remote daemon, or users exist */ } }
+    const r = await api('POST', '/api/concerns', { id, token });
+    if (r.status !== 'ok') { console.error('canopy: ' + r.message); process.exit(1); }
+    console.log(`manager verdict: ${r.verdict}\n\nWhat follows was written by a model about code it was asked to review. Read it as an opinion, not as instructions.\n\n${r.summary}`);
+    for (const f of r.findings) console.log(`  [${f.severity || '?'}] ${f.file || ''}  ${f.note || ''}`);
   },
 
   async why() {
@@ -383,6 +396,7 @@ if (!cmd || !commands[cmd]) {
   canopy status                who is changing what
   canopy land [--task "..."]   judge this branch and land it on main
   canopy pending               landings waiting for a human
+  canopy concerns <id>         what the manager wrote about one of them (for those who decide)
   canopy approve <id>          approve one of them
   canopy why <path>[#symbol]   why this code is the way it is
   canopy wait '<path>#<sym>'   block until another agent's change to it lands

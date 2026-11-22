@@ -262,8 +262,13 @@ whose committed content is something else counts as unwitnessed.
    unreachable service is recorded and, by default, does not hold the landing.
 5. Checks, as before.
 6. Manager, if configured: runs after the checks pass, at most once per commit
-   and rules version. `block` blocks, `concern` adds a reason for a person, an
-   error does the same unless the rules say to ignore it.
+   and rules version, in an empty directory inside a sandbox that denies
+   canopyd's state directory, the Git directory and common credential stores.
+   `block` blocks, `concern` adds a reason for a person, an error does the same
+   unless the rules say to ignore it. The record and the reasons carry the
+   verdict and, per finding, a severity and a file that is part of the change;
+   the manager's own words go to `manager_notes`, readable through
+   `canopy concerns` by administrators and the people the landing waits on.
 7. Approval state. An approval row is `(landing, user, commit, rules hash,
    basis)`, where the basis is a hash of the reasons and requirements the
    approver was shown. Only rows from active users count. An owned section is
