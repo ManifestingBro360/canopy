@@ -33,12 +33,23 @@ create table if not exists landed_nodes(landing text, node text, kind text, prim
 create index if not exists landed_nodes_node on landed_nodes(node);
 create table if not exists events(seq integer primary key, ts int, type text, data text, hash text);
 create table if not exists meta(k text primary key, v text);
+create table if not exists users(name text primary key, role text, token_hash text unique, created int, disabled int default 0);
+create table if not exists approvals(landing text, user text, commit_sha text, rules_hash text, basis text default '', ts int, primary key(landing, user));
+create table if not exists authors(worktree text, path text, session text, user text, model text, agent text, how text, primary key(worktree, path, session, model, how));
+create table if not exists promotions(id text primary key, env text, commit_sha text, status text, record text, ts int);
+create table if not exists channels(name text primary key, url text, kind text, created int);
+create table if not exists notified(key text primary key, ts int);
+create table if not exists known(worktree text, node text, hash text, ts int, primary key(worktree, node));
+create table if not exists audit(seq integer primary key, ts int, user text, ip text, action text, target text, detail text, hash text);
 `;
+// Columns added after 0.1. A database made by 0.1 gains them on first open.
+const ADDED = [['sessions', 'user', "text default ''"], ['sessions', 'ip', "text default ''"], ['wtfiles', 'oid', "text default ''"]];
 
 export function openStore(home) {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(join(home, 'canopy.db'));
   db.exec(SCHEMA);
+  for (const [t, c, type] of ADDED) { try { db.exec(`alter table ${t} add column ${c} ${type}`); } catch { /* already there */ } }
   const cache = new Map();
   const q = (sql) => { let s = cache.get(sql); if (!s) cache.set(sql, (s = db.prepare(sql))); return s; };
   const store = {
@@ -60,6 +71,15 @@ export function openStore(home) {
       return ev;
     },
     eventsHead: () => (store.get('select hash from events order by seq desc limit 1') || {}).hash || null,
+    // The audit log: who did what, from where. Hash-chained like the event log,
+    // but never sent to the map and never written into Git.
+    audit(who, action, target, detail) {
+      const ts = Date.now(), user = (who && who.user) || '', ip = (who && who.ip) || '';
+      const prev = store.get('select hash from audit order by seq desc limit 1');
+      const body = JSON.stringify(detail || {});
+      const hash = createHash('sha256').update((prev ? prev.hash : '') + ts + user + ip + action + String(target || '') + body).digest('hex').slice(0, 32);
+      store.run('insert into audit(ts, user, ip, action, target, detail, hash) values(?,?,?,?,?,?,?)', ts, user, ip, action, String(target || ''), body, hash);
+    },
   };
   return store;
 }

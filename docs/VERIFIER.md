@@ -90,3 +90,53 @@ Four of the tester's tests were edited after these fixes, each with a comment
 saying why: two could no longer write a marker file outside the sandbox, one
 asserted the old "prefix" wording, and one could not install the command
 globally and now checks that the install step is documented.
+
+## Round 3 — people and policy (0.2)
+
+An independent reviewer read the access-control and approval code against the
+0.2 brief and reproduced every finding as a failing test. It confirmed 18
+defects. All 18 are fixed, and the 18 reproductions are kept as regression
+tests in `test/review.test.mjs`.
+
+| # | Defect reproduced | Severity | Fix |
+|---|---|---|---|
+| 1 | A model switch relabelled what the earlier model had written | Serious | Authorship rows carry the model and person the session had when it wrote |
+| 2 | `canopy release` wiped authorship; the next session took the credit | Serious | Authorship lasts until the branch lands, whatever is released |
+| 3 | A session that merged another model's branch became its sole author | Serious | Changes that arrive through a shell command are marked as such; in a section with model rules they need a person |
+| 4 | Edit-time policy was judged by the session's first user, so a hook naming someone else's session id passed as them | Serious | A session id is stored under the user whose token sent it, and policy is judged against the request's token |
+| 5 | A disabled owner's earlier approval still counted | Serious | Only approvals from active users count |
+| 6 | A pending landing by a since-disabled owner landed in her name | Moderate | Refused; someone else has to land it |
+| 7 | The same two faults for promotions | Serious | Same fixes |
+| 8 | A feature branch's intermediate commit, never checked as a tip, could be promoted, and the canonical repository accepted it | Serious | Only commits on the first-parent line of the stage before qualify, in the gate and in the `pre-receive` hook |
+| 9 | Two rules for one path kept only the first rule's owners, writers and models | Moderate | Requirements are kept per rule, not per path |
+| 10 | An edit made outside any session to a file an allowed model had touched landed unflagged | Moderate | The content last seen for each file is kept; committed content that differs counts as unwitnessed |
+| 11 | An approval was stored before a re-land that could fail, then silently covered reasons that appeared later | Moderate | An approval is bound to the reasons shown, and one that cannot be acted on is discarded |
+| 12 | With broken rules on `main`, the repair's own rules named who could approve it | Moderate | Administrators only |
+| 13 | A Codex patch's `Move to:` target was not checked at edit time | Moderate | Checked |
+| 14 | Only the first 50 files of a patch were checked | Minor | All are |
+| 15 | An unreadable `canopy.envs` setting made the hook guard nothing | Minor | Refuses the push |
+| 16 | With no users, a worktree that had released its work now received landing notices | Minor | Releasing also forgets what the worktree knew |
+| 17 | `@constructor` passed as a team name | Minor | Own-property lookups |
+| 18 | `canopy hook` exited with an error on a `null` event | Minor | Exits quietly |
+
+Also changed after the reviewer's unconfirmed suspicions: a person whose
+session wrote a change cannot approve the reasons it was held for, even if
+someone else lands it; an owner can approve such reasons only when the whole
+change lies inside owned sections, so a trivial edit elsewhere cannot recruit
+an approver; a repository-wide owner is no longer described as "a person".
+
+A separate automated security review flagged the Codex manager adapter: Codex
+cannot run with its tools switched off, so a diff under review could try to
+talk the manager model into running commands. The manager now runs in an empty
+directory, never in the repository; the adapter asks for the read-only
+sandbox; and its header, the README and `SECURITY.md` say plainly that it is
+for repositories whose contributors are trusted. The manager's words are shown
+as quoted data wherever they appear.
+
+One behaviour changed on purpose and is not a defect: landing notices now say
+who landed the change and why (the stated purpose), so the receiving agent can
+decide what to re-read without opening the file.
+
+Still owed, as before: a hands-on penetration test of the sandbox and gate by
+someone outside the project, and runs against real Claude Code and Codex
+sessions and live manager models.

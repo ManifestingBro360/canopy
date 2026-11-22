@@ -11,12 +11,15 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { homedir, tmpdir, platform } from 'node:os';
 import { extract } from './extract.mjs';
 import { nodeId, pathOf, nameOf, bare, diffSymbols } from './graph.mjs';
 import { git, tryGit, gitOk, worktreeOf, branchOf, showFile, mergeTree, commitTree, worktrees } from './git.mjs';
-import { resolveAll, isTestFile, loadRules } from './rules.mjs';
+import { resolveAll, resolve, isTestFile, loadRules, modelMatch } from './rules.mjs';
+import { usersExist, admins, activeUsers } from './access.mjs';
+import { newDeps, lookup } from './advisories.mjs';
+import { dossier, runManager } from './manager.mjs';
 import { signRecord } from './sign.mjs';
 import { fence } from './engine.mjs';
 
@@ -71,6 +74,7 @@ export class Gate {
     this.scratchRoot = join(engine.common, 'canopy-scratch');
     this.free = []; this.made = 0; this.waiting = []; this.busy = 0; this.port = 0; this.checkRuns = 0;
     this.chain = Promise.resolve();
+    this.advCache = new Map(); this.mgrCache = new Map();
     const tp = join(home, 'human.token');
     if (!existsSync(tp)) writeFileSync(tp, randomBytes(16).toString('hex') + '\n', { mode: 0o600 });
     this.humanToken = readFileSync(tp, 'utf8').trim();
@@ -80,7 +84,7 @@ export class Gate {
 
   // ---- analysis --------------------------------------------------------
 
-  analyze(wt, C, M) {
+  analyze(wt, C, M, by = '') {
     const e = this.e, repo = e.repo, g = e.graph;
     const mb = git(repo, ['merge-base', M, C]);
     const entries = [];
@@ -162,7 +166,11 @@ export class Gate {
       }
     }
     const witnessed = new Set(e.store.all('select path from writes where worktree=? union select path from wtfiles where worktree=?', wt, wt).map((r) => r.path));
-    const unwitnessed = entries.map((en) => en.path).filter((p) => !witnessed.has(p));
+    // A file counts as witnessed only if what was committed is what Canopy last
+    // saw there: an edit made afterwards, outside any session, is not covered by
+    // the record of the edits before it.
+    const seenOid = new Map(e.store.all("select path, oid from wtfiles where worktree=? and oid != ''", wt).map((r) => [r.path, r.oid]));
+    const unwitnessed = entries.filter((en) => !witnessed.has(en.path) || (en.st !== 'D' && seenOid.has(en.path) && seenOid.get(en.path) !== tryGit(repo, ['rev-parse', '--verify', '--quiet', `${C}:${en.path}`]))).map((en) => en.path);
     const taint = e.store.all('select source from taint where worktree=?', wt).map((r) => r.source);
     if (unwitnessed.length) taint.push('unwitnessed-writes');
     // Rules come from main. A branch that changes the rules file must leave a
@@ -170,10 +178,11 @@ export class Gate {
     // land is a repair, judged by the repaired rules and approved by a person.
     let rs = e.ruleset;
     const blocked = [], human = [];
+    let repair = false;
     if (touched.has('.canopy/rules.json')) {
       const cand = loadRules(repo, C);
       if (cand.error) blocked.push('this branch would leave the rules file broken: ' + cand.error);
-      else if (rs.error) { rs = cand; human.push(`the rules on ${e.main} are invalid and this landing repairs them`); }
+      else if (rs.error) { rs = cand; repair = true; human.push(`the rules on ${e.main} are invalid and this landing repairs them`); }
     }
     if (rs.error) blocked.push(rs.error + `. Nothing can land until a change that repairs .canopy/rules.json lands; that change needs a person.`);
     // Tests may not cover a call the branch just wrote. If main changed the thing
@@ -188,7 +197,52 @@ export class Gate {
     if (coverage < plan.min_coverage) human.push(`inspection coverage ${Math.round(coverage * 100)}% is below the ${Math.round(plan.min_coverage * 100)}% this section requires`);
     if (changedLines > plan.max_changed_lines) human.push(`${changedLines} changed lines exceeds the section limit of ${plan.max_changed_lines}`);
     if (unwitnessed.length && plan.no_unwitnessed) human.push(`files changed with no recorded agent activity: ${unwitnessed.slice(0, 8).join(', ')}`);
-    return { mb, entries, touched: [...touched].filter(Boolean), writeSet, blast: [...blast], unread, coverage, stale, unwitnessed, taint, plan, changedLines, testReductions, blocked, human, rulesHash: rs.hash, rs, idents };
+
+    // People and models. Policy comes from the rules on main; identity comes
+    // from canopyd's own user list, never from what a request says about itself.
+    const strict = usersExist(e.store);
+    // Each row is one session's hand in one file, with the person and model it had at that moment.
+    const authorRows = e.store.all('select path, user, model, agent, how from authors where worktree=?', wt);
+    const where = (x) => x.path || 'the repository';
+    if ((plan.owned.size || plan.writers.size) && !strict) blocked.push(`the rules name owners or writers, but this canopyd has no users, so it cannot tell who anyone is. Add them with \`canopy user add <name>\`.`);
+    else {
+      for (const w of plan.writers.values()) {
+        const people = new Set([by, ...authorRows.filter((r) => w.files.includes(r.path)).map((r) => r.user)].filter(Boolean));
+        for (const u of people) if (!w.allowed.includes(u)) blocked.push(`${u} may not change ${where(w)} (${w.files.slice(0, 4).join(', ')}). The rules allow only: ${w.allowed.join(', ')}.`);
+      }
+    }
+    for (const m of plan.models.values()) {
+      const bad = new Set();
+      for (const r of authorRows.filter((x) => m.files.includes(x.path))) {
+        if (!r.model) bad.add('a session whose model is not known');
+        else if (!m.allow.some((pat) => modelMatch(pat, r.model))) bad.add(r.model);
+        // A shell command can be a merge, a script or a paste: the session that ran it did not necessarily write it.
+        if (r.how !== 'hook') bad.add('changes that arrived through a shell command, a merge or a script');
+      }
+      for (const f of m.files) if (entries.some((en) => en.path === f) && (!authorRows.some((r) => r.path === f) || unwitnessed.includes(f))) bad.add('an author Canopy has no record of');
+      if (bad.size) human.push(`${where(m)} accepts changes written by these models only: ${m.names.join(', ')}. This change was written by: ${[...bad].join(', ')}`);
+    }
+    // Approvals this landing needs: from the owners of every section it changes,
+    // and from owners who asked to be consulted when code they depend on changes shape.
+    const required = [...plan.owned.values()].map((o) => ({ section: o.path, owners: o.owners, need: o.approvals, why: 'owns files this change touches' }));
+    const reach = new Map();
+    for (const w of writeSet) {
+      if (w.kind !== 'signature' && w.kind !== 'removed') continue;
+      for (const d of g.dependents(w.node, 2)) {
+        if (written.has(d)) continue;
+        for (const gd of resolve(rs, pathOf(d)).guards) {
+          if (plan.owned.has(gd.key)) continue;
+          const x = reach.get(gd.key) || { ...gd, nodes: [] };
+          x.nodes.push(d); reach.set(gd.key, x);
+        }
+      }
+    }
+    for (const x of reach.values()) required.push({ section: x.path, owners: x.owners, need: x.approvals, why: `code there depends on what this change alters (${x.nodes.slice(0, 4).join(', ')})` });
+    if (required.length && !strict && !blocked.length) blocked.push('sections with owners are affected, but this canopyd has no users. Add them with `canopy user add <name>`.');
+    const authors = [...new Map(authorRows.map((r) => [`${r.user}|${r.agent}|${r.model}`, { user: r.user || '', harness: r.agent || '', model: r.model || '' }])).values()];
+    // Whether every file the change touches sits inside some owned section.
+    const allOwned = entries.length > 0 && [...touched].filter(Boolean).every((f) => resolve(rs, f).owned.length);
+    return { required, authors, by, repair, allOwned, authorUsers: [...new Set(authorRows.map((r) => r.user).filter(Boolean))], mb, entries, touched: [...touched].filter(Boolean), writeSet, blast: [...blast], unread, coverage, stale, unwitnessed, taint, plan, changedLines, testReductions, blocked, human, rulesHash: rs.hash, rs, idents };
   }
 
   // ---- checks ----------------------------------------------------------
@@ -285,45 +339,149 @@ export class Gate {
     s.event('landing', { id, branch, status, wt: basename(wt), coverage: record.coverage, reasons: record.reasons || [] });
   }
 
-  async land({ cwd, approval, intent }) {
+  // ---- people ----------------------------------------------------------
+
+  // Which approvals a landing still lacks. An approval counts only for the
+  // exact commit and the exact rules it was given for.
+  // What an approval is given for: these reasons and these requirements. If
+  // either changes, earlier approvals no longer cover the landing.
+  basis(a) {
+    return createHash('sha256').update(JSON.stringify([[...a.human].sort(), a.required.map((r) => [r.section, r.owners, r.need])])).digest('hex').slice(0, 16);
+  }
+
+  approvalState(a, id, C) {
+    const s = this.e.store, by = a.by, active = activeUsers(s), basis = this.basis(a);
+    // Only approvals for this commit, these rules and these reasons, from people who are still users.
+    const rows = s.all('select user, ts from approvals where landing=? and commit_sha=? and rules_hash=? and basis=? order by ts', id, C, a.rulesHash, basis)
+      .filter((r) => r.user.startsWith('human:') || active.has(r.user));
+    const approved = new Set(rows.map((r) => r.user));
+    const waiting = [];
+    for (const r of a.required) {
+      // An owner who lands a change has, by landing it, approved it.
+      const have = r.owners.filter((u) => active.has(u) && (approved.has(u) || u === by));
+      if (have.length < r.need) waiting.push({ section: r.section, owners: r.owners.filter((u) => active.has(u)), need: r.need, have, why: r.why });
+    }
+    if (a.human.length) {
+      // These need a person who neither landed nor wrote the change: an
+      // administrator, or, when the whole change lies inside owned sections, one
+      // of their owners. A repair of broken rules is for administrators only: the
+      // rules being repaired must not pick their own approver. With no users, the
+      // single human token stands in.
+      const owners = a.allOwned && !a.repair ? a.required.flatMap((r) => r.owners) : [];
+      const eligible = [...new Set([...owners, ...admins(s)])].filter((u) => active.has(u) && u !== by && !a.authorUsers.includes(u));
+      const have = [...approved].filter((u) => u.startsWith('human:') || eligible.includes(u));
+      if (!have.length) waiting.push({ kind: 'person', token: !usersExist(s) || undefined, section: '', owners: eligible, need: 1, have: [], why: 'a person other than the one landing must look at the reasons listed' });
+    }
+    return { ok: !waiting.length, waiting, approved: rows, basis };
+  }
+
+  async advise(a, C) {
+    const cfg = a.rs.advisories;
+    if (!cfg) return;
+    const deps = newDeps(this.e.repo, a.mb, C, a.touched);
+    a.advisories = []; a.advisoryStatus = deps.length ? 'checked' : 'no new dependencies';
+    if (!deps.length) return;
+    const key = C + a.mb;
+    let r = this.advCache.get(key);
+    if (!r) { r = await lookup(deps); if (r.ok) { if (this.advCache.size > 200) this.advCache.clear(); this.advCache.set(key, r); } }
+    if (!r.ok) {
+      a.advisoryStatus = 'unavailable: ' + r.error;
+      if (cfg.onUnavailable === 'review') a.human.push('the vulnerability database could not be reached, and the rules ask for a person when that happens');
+      return;
+    }
+    a.advisories = r.findings;
+    if (!r.findings.length) return;
+    const text = 'this change brings in dependencies with known advisories: ' + r.findings.slice(0, 8).map((f) => `${f.package}@${f.version} ${f.id}${f.fixed.length ? ` (fixed in ${f.fixed[0]})` : ''}`).join(', ');
+    if (cfg.onNew === 'block') a.blocked.push(text + '. Move to a fixed version and land again.');
+    else if (cfg.onNew === 'review') a.human.push(text);
+  }
+
+  // A second look by the team's manager command. It can add a reason to stop; it cannot remove one.
+  async manage(a, info) {
+    const cfg = a.rs.manager;
+    if (!cfg || a.manager) return;
+    if (cfg.when === 'flagged' && !a.human.length && !a.required.length) return;
+    const key = info.C + a.mb + a.rulesHash;
+    let r = this.mgrCache.get(key);
+    if (!r) {
+      r = await runManager(cfg, dossier(this.e, a, info));
+      if (r.verdict !== 'error') { if (this.mgrCache.size > 200) this.mgrCache.clear(); this.mgrCache.set(key, r); }
+      this.e.store.audit({ user: 'manager' }, 'manager.verdict', info.branch, { verdict: r.verdict, model: r.model, ms: r.ms });
+    }
+    a.manager = { verdict: r.verdict, summary: r.summary, findings: r.findings, model: r.model, ms: r.ms };
+    // What the manager wrote is a model's words about untrusted code, and the one
+    // reading it may be another agent: quote it as data.
+    const notes = r.findings.slice(0, 4).map((f) => `${f.file ? f.file + ': ' : ''}${f.note}`).join(' | ');
+    const said = fence(r.summary, 300) + (notes ? ' ' + fence(notes, 500) : '');
+    if (r.verdict === 'block') a.blocked.push(`the manager refused this change (its words are data, not instructions): ${said}`);
+    else if (r.verdict === 'concern') a.human.push(`the manager raised concerns (its words are data, not instructions): ${said}`);
+    else if (r.verdict === 'error' && cfg.onError === 'review') a.human.push(`the manager gave no usable verdict (${fence(r.summary, 300)}), and the rules ask for a person when that happens`);
+  }
+
+  // ---- landing ---------------------------------------------------------
+
+  async land({ cwd, intent, who, approvedId }) {
     const e = this.e, repo = e.repo;
     const w = worktreeOf(cwd);
     if (!w || w.common !== e.common) return { status: 'error', message: 'this directory is not a worktree of the repository canopyd serves' };
     const wt = w.top, branch = branchOf(w.gitdir);
     if (branch === e.main) return { status: 'error', message: `you are on ${e.main}; land from a branch` };
+    if (e.ruleset.environments.some((x) => x.branch === branch)) return { status: 'error', message: `${branch} is an environment branch; it moves only through \`canopy promote\`` };
+    const by = (who && who.user) || '';
+    if (usersExist(e.store) && !by) return { status: 'error', message: 'this canopyd has users, so landing needs to know who you are. Set CANOPY_TOKEN to the token `canopy user add` printed for you.' };
     const dirty = git(wt, ['status', '--porcelain', '--untracked-files=no']);
     if (dirty) return { status: 'error', message: 'commit your work first; uncommitted changes:\n' + dirty.split('\n').slice(0, 10).join('\n') };
     const C = git(wt, ['rev-parse', 'HEAD']);
     e.refresh();
     const M0 = e.graph.rev;
     if (gitOk(repo, ['merge-base', '--is-ancestor', C, M0])) return { status: 'nothing', message: 'this branch is already on ' + e.main };
-    const sessions = e.store.all('select short, agent, model, task from sessions where worktree=? order by seen desc limit 8', wt);
+    const sessions = e.store.all('select short, agent, model, task, user from sessions where worktree=? order by seen desc limit 8', wt);
     const task = (intent || (sessions.find((x) => x.task) || {}).task || git(repo, ['log', '-1', '--format=%s', C])).replace(/\s+/g, ' ').slice(0, 200);
     const prior = e.store.get("select id from landings where worktree=? and commit_sha=? and status='needs-human'", wt, C);
     const id = prior ? prior.id : randomBytes(4).toString('hex');
     const msg = `Land ${branch}: ${task}\n\nCanopy-Landing: ${id}`;
+    const info = { C, branch, intent: task, by, sessions: sessions.map((x) => ({ user: x.user || '', harness: x.agent, model: x.model })) };
 
     const draft = (a, extra = {}) => ({
-      v: 1, id, candidate: C, branch, worktree: basename(wt), intent: task,
-      sessions: sessions.map((x) => ({ id: x.short, agent: x.agent, model: x.model })),
+      v: 2, id, candidate: C, branch, worktree: basename(wt), intent: task, by: by || undefined,
+      sessions: sessions.map((x) => ({ id: x.short, agent: x.agent, model: x.model, user: x.user || undefined })),
+      authors: a.authors, owners_required: a.required.length ? a.required : undefined,
       write_set: a.writeSet, blast: a.blast.length, coverage: Math.round(a.coverage * 1000) / 1000, unread: a.unread.slice(0, 60),
       unwitnessed: a.unwitnessed, taint: a.taint, stale_assumptions: a.stale, changed_lines: a.changedLines, test_reductions: a.testReductions,
+      advisories: a.advisories, advisory_status: a.advisoryStatus, manager: a.manager,
       rules_hash: a.rulesHash, trust: 'hook-reported', ...extra,
     });
     const stop = (a, status, reasons, extra) => {
       const record = draft(a, { reasons, ...extra });
       this.save(id, wt, branch, C, '', status, record);
+      e.store.audit(who, 'land.' + status, branch, { id, commit: C.slice(0, 12), reasons: reasons.slice(0, 6) });
+      if (e.out) {
+        // Worth a security reader's eye: outside content, known-vulnerable dependencies, a manager's refusal, or someone reaching past their access.
+        const sec = a.taint.length || (a.advisories || []).length || (a.manager && a.manager.verdict === 'block') || reasons.some((r) => /may not change|accepts changes written by/.test(r));
+        const held = status === 'needs-human', waiting = record.waiting_on || [];
+        e.out.emit({ kinds: [held ? 'approval' : 'blocked', ...(sec ? ['security'] : [])], id, branch, by, files: a.touched, waiting, once: `${status}|${id}|${C}|${record.basis || reasons.join('|')}`,
+          title: held ? `Approval needed: ${branch}` : `Landing refused: ${branch}`,
+          lines: [`Purpose: ${task}`, by ? `Asked for by: ${by}` : '', ...reasons.slice(0, 5).map((r) => `- ${r}`),
+            ...(held ? [waiting.length ? `Waiting on: ${waiting.map((q) => (q.token ? 'anyone holding the approval token' : `${q.kind === 'person' ? 'a person' : q.section || 'the whole repository'} (${q.owners.join(', ') || 'no one eligible'})`)).join('; ')}` : '', `To approve: canopy approve ${id}`] : [])] });
+      }
       return { status, id, reasons, record };
     };
-    const okApproval = (a) => approval && approval.commit === C && approval.rules_hash === a.rulesHash && approval.id === id;
+    const needHuman = (x) => !this.approvalState(x, id, C).ok;
+    const human = (x, r) => {
+      const st = this.approvalState(x, id, C);
+      const asks = st.waiting.map((q) => q.kind === 'person'
+        ? `needs a person${q.owners.length ? ': ' + q.owners.join(', ') : ' (no eligible user exists yet; add an administrator with `canopy user add <name> --admin`)'}`
+        : `needs ${q.need - q.have.length} more approval${q.need - q.have.length > 1 ? 's' : ''} from the owners of ${q.section || 'the repository'} (${q.owners.join(', ')}): ${q.why}`);
+      const stale = approvedId && (approvedId !== id || e.store.get('select 1 x from approvals where landing=? and (commit_sha != ? or rules_hash != ? or basis != ?)', id, C, x.rulesHash, st.basis));
+      return stop(x, 'needs-human', [...x.human, ...(usersExist(e.store) ? asks : [])], { checks: r.checks, perf: r.perf, sandbox: r.sandbox, waiting_on: st.waiting, basis: st.basis,
+        note: stale ? 'the branch, the rules or the reasons changed after approval was given; approval must be given again' : undefined });
+    };
 
-    let a = this.analyze(wt, C, M0);
+    let a = this.analyze(wt, C, M0, by);
+    await this.advise(a, C);
     if (a.blocked.length) return stop(a, 'blocked', a.blocked);
     let m = mergeTree(repo, M0, C);
     if (m.conflicts) return stop(a, 'blocked', [`does not merge cleanly with ${e.main}: ${m.conflicts.slice(0, 8).join(', ')}. Run \`git merge ${e.main}\`, resolve, commit, and land again.`]);
-    const needHuman = (x) => x.human.length && !okApproval(x);
-    const human = (x, r) => stop(x, 'needs-human', x.human, { checks: r.checks, perf: r.perf, sandbox: r.sandbox,
-      note: approval ? 'the branch or the rules changed after approval was given; approval must be given again' : undefined });
     this.busy++;
     try {
       let R = null, res = null;
@@ -334,6 +492,8 @@ export class Gate {
         R = commitTree(repo, m.tree, [M0, C], msg);
         res = await this.runChecks(R, a.plan, a.rs);
         if (res.failed) return stop(a, 'blocked', [res.failed], { checks: res.checks, perf: res.perf, sandbox: res.sandbox });
+        await this.manage(a, info);
+        if (a.blocked.length) return stop(a, 'blocked', a.blocked, { checks: res.checks, perf: res.perf, sandbox: res.sandbox });
         if (needHuman(a)) return human(a, res);
       }
 
@@ -346,7 +506,8 @@ export class Gate {
         let revalidated = null;
         if (M1 !== M0 || !res) {
           if (M1 !== M0) {
-            a = this.analyze(wt, C, M1);
+            a = this.analyze(wt, C, M1, by);
+            await this.advise(a, C);
             if (a.blocked.length) return stop(a, 'blocked', a.blocked);
             m = mergeTree(repo, M1, C);
             if (m.conflicts) return stop(a, 'blocked', [`${e.main} moved while this landing waited and the branch no longer merges cleanly: ${m.conflicts.slice(0, 8).join(', ')}. Run \`git merge ${e.main}\` and land again.`]);
@@ -360,12 +521,18 @@ export class Gate {
             if (res.failed) return stop(a, 'blocked', [(again ? `after ${e.main} moved: ` : '') + res.failed], { checks: res.checks, perf: res.perf, sandbox: res.sandbox });
             if (again) revalidated = `checks re-run on the new ${e.main}`;
           }
+          await this.manage(a, info);
+          if (a.blocked.length) return stop(a, 'blocked', a.blocked, { checks: res.checks, perf: res.perf, sandbox: res.sandbox });
           if (needHuman(a)) return human(a, res);
         }
+        const st = this.approvalState(a, id, C);
+        const approvers = st.approved.map((r) => ({ user: r.user.replace(/^human:/, ''), ts: r.ts }));
         const record = draft(a, {
           commit: R, base: M1, parents: [M1, C], tree: git(repo, ['rev-parse', R + '^{tree}']), verdict: 'land',
-          checks: res.checks, perf: res.perf, sandbox: res.sandbox, revalidated, approval: okApproval(a) ? approval : undefined,
-          reasons: okApproval(a) ? a.human : [], events_head: e.store.eventsHead(), ts: Date.now(),
+          checks: res.checks, perf: res.perf, sandbox: res.sandbox, revalidated,
+          approvals: approvers.length ? approvers : undefined,
+          approval: approvers.length ? { id, by: approvers.map((x) => x.user).join(', '), ts: approvers[approvers.length - 1].ts, commit: C, rules_hash: a.rulesHash, reasons: a.human } : undefined,
+          reasons: approvers.length ? a.human : [], events_head: e.store.eventsHead(), ts: Date.now(),
         });
         delete record.candidate;
         const noteFile = join(this.home, `note-${id}.json`);
@@ -395,6 +562,9 @@ export class Gate {
           return stop(a, 'blocked', [`${e.main} moved outside Canopy during landing; land again`], { checks: res.checks });
         }
         this.finish(id, wt, branch, C, R, record, a);
+        e.store.audit(who, 'land.landed', branch, { id, commit: R.slice(0, 12), approvals: approvers.map((x) => x.user) });
+        if (e.out) e.out.emit({ kinds: ['landed'], id, branch, by, files: a.touched, title: `Landed on ${e.main}: ${branch}`,
+          lines: [`Purpose: ${task}`, by ? `By: ${by}` : '', approvers.length ? `Approved by: ${approvers.map((x) => x.user).join(', ')}` : '', `Commit: ${R.slice(0, 10)}`] });
         return { status: 'landed', id, commit: R, record, warning };
       });
     } finally { this.busy--; }
@@ -411,16 +581,20 @@ export class Gate {
         else s.run('delete from tainted_nodes where node=?', w.node);
       }
     });
-    // Tell every other worktree whose record touches what just landed.
+    // Tell every other worktree whose record touches what just landed, and
+    // those that knew the old version from earlier work. Say who and why, so
+    // the receiver can decide what to re-read without opening the file.
+    const said = a.taint.length ? '' : ` Its purpose: ${fence(record.intent, 100)}.`;
     for (const w of a.writeSet) {
       if (w.kind === 'added' || w.kind === 'format') continue;
       const high = w.kind !== 'body';
       const targets = new Set(s.all(`select worktree from reads where node=? and worktree != ? ${high ? '' : 'and strength=2'}`, w.node, wt).map((r) => r.worktree));
       for (const r of s.all('select worktree from writes where node=? and worktree != ?', w.node, wt)) targets.add(r.worktree);
+      for (const r of s.all('select worktree from known where node=? and worktree != ?', w.node, wt)) if (existsSync(r.worktree)) targets.add(r.worktree);
       if (high && nameOf(w.node)) for (const r of s.all('select distinct worktree from refs where name=? and worktree != ?', bare(nameOf(w.node)), wt)) targets.add(r.worktree);
       for (const t of targets) {
         e.notify(t, w.node, e.main + '\u001f' + id, high ? 'high' : 'low', 'landed',
-          `${w.node} ${w.kind === 'removed' ? 'was removed' : w.kind === 'signature' ? 'changed its signature' : 'changed'} on ${e.main} (landing ${R.slice(0, 8)}, branch ${fence(branch, 60)}). Run \`git merge ${e.main}\` before you build on it.`);
+          `${w.node} ${w.kind === 'removed' ? 'was removed' : w.kind === 'signature' ? 'changed its signature' : 'changed'} on ${e.main} (landing ${R.slice(0, 8)}, branch ${fence(branch, 60)}${record.by ? ', by ' + fence(record.by, 40) : ''}).${said} Run \`git merge ${e.main}\` before you build on it.`);
       }
     }
     e.clearWorktree(wt, true); // the session that took in outside content is still running: its taint stays
@@ -428,10 +602,15 @@ export class Gate {
   }
 
   pending() {
-    return this.e.store.all("select id, branch, worktree, record, ts from landings where status='needs-human' order by ts").map((r) => {
+    const lands = this.e.store.all("select id, branch, worktree, record, ts from landings where status='needs-human' order by ts").map((r) => {
       const x = JSON.parse(r.record);
-      return { id: r.id, branch: r.branch, ts: r.ts, intent: x.intent, reasons: x.reasons, coverage: x.coverage, unread: x.unread, taint: x.taint, changed_lines: x.changed_lines, checks: x.checks, write_set: x.write_set };
+      return { id: r.id, branch: r.branch, ts: r.ts, intent: x.intent, by: x.by, reasons: x.reasons, coverage: x.coverage, unread: x.unread, taint: x.taint, changed_lines: x.changed_lines, checks: x.checks, write_set: x.write_set, waiting_on: x.waiting_on || [], manager: x.manager, advisories: x.advisories };
     });
+    const proms = this.e.store.all("select id, env, record, ts from promotions where status='needs-approval' order by ts").map((r) => {
+      const x = JSON.parse(r.record);
+      return { id: r.id, branch: `promote to ${r.env}`, ts: r.ts, intent: `promote ${String(x.commit).slice(0, 10)} to ${r.env}`, by: x.by, reasons: x.reasons, coverage: 1, unread: [], taint: [], changed_lines: 0, checks: [], write_set: [], waiting_on: x.waiting_on || [] };
+    });
+    return [...lands, ...proms];
   }
 
   isHuman(token) {
@@ -439,12 +618,126 @@ export class Gate {
     return a.length === b.length && timingSafeEqual(a, b);
   }
 
-  async approve(id, token, by) {
-    if (!this.isHuman(token)) return { status: 'error', message: 'approval needs the human token' };
-    const row = this.e.store.get("select * from landings where id=? and status='needs-human'", id);
+  async approve(id, { who, token, by } = {}) {
+    const s = this.e.store, strict = usersExist(s);
+    if (String(id).startsWith('env-')) return this.approvePromotion(id, who);
+    const row = s.get("select * from landings where id=? and status='needs-human'", id);
     if (!row) return { status: 'error', message: 'no landing with that id is waiting for a human' };
     const rec = JSON.parse(row.record);
     if (!existsSync(row.worktree)) return { status: 'error', message: 'the worktree for that landing is gone' };
-    return this.land({ cwd: row.worktree, intent: rec.intent, approval: { id, by: String(by || 'human').slice(0, 60), ts: Date.now(), commit: row.commit_sha, rules_hash: rec.rules_hash, reasons: rec.reasons } });
+    let approver;
+    if (strict) {
+      // With users, only a named person can approve, and only where the rules give them a say.
+      if (!who || !who.user) return { status: 'error', message: 'approval needs your own token (CANOPY_TOKEN). The shared human token stops working once users exist.' };
+      // The landing goes in under the name of whoever asked for it; they must still be a user.
+      if (rec.by && !activeUsers(s).has(rec.by)) return { status: 'error', message: `${rec.by}, who asked for this landing, is no longer an active user. Someone else has to run \`canopy land\` on that branch.` };
+      const open = (rec.waiting_on || []).filter((q) => q.owners.includes(who.user) && !(q.have || []).includes(who.user));
+      if (who.user === rec.by && !open.some((q) => q.kind !== 'person')) return { status: 'error', message: `${who.user} is the one landing this change; someone else has to approve it` };
+      if (!open.length) { s.audit(who, 'approve.denied', id, {});
+        if (this.e.out) this.e.out.emit({ kinds: ['security'], id, branch: row.branch, by: who.user, title: `Approval refused: ${who.user} has no say over ${row.branch}`, lines: [`Landing: ${id}`] }); return { status: 'error', message: `${who.user} has no say over this landing. It is waiting on: ${(rec.waiting_on || []).map((q) => `${q.kind === 'person' ? 'a person' : q.section || 'the whole repository'} (${q.owners.join(', ') || 'no one eligible'})`).join('; ')}` }; }
+      approver = who.user;
+    } else {
+      if (!this.isHuman(token)) return { status: 'error', message: 'approval needs the human token' };
+      approver = 'human:' + String(by || 'human').replace(/[^\x20-\x7e]/g, '').slice(0, 60);
+    }
+    s.run('insert or replace into approvals(landing, user, commit_sha, rules_hash, basis, ts) values(?,?,?,?,?,?)', id, approver, row.commit_sha, rec.rules_hash, rec.basis || '', Date.now());
+    s.audit(who, 'approve', id, { branch: row.branch, commit: row.commit_sha.slice(0, 12), as: approver });
+    const r = await this.land({ cwd: row.worktree, intent: rec.intent, who: { user: rec.by || '', ip: (who && who.ip) || '' }, approvedId: id });
+    // An approval that could not be acted on (the worktree was not in a state to
+    // land) is not kept for later: whoever gave it saw the landing as it was then.
+    if (r.status === 'error') s.run('delete from approvals where landing=? and user=?', id, approver);
+    return r;
+  }
+
+  // ---- environments ----------------------------------------------------
+
+  // Move an environment branch forward to a commit already on the stage before
+  // it. Like a landing, the move is checked, signed and, on the canonical
+  // repository, refused by any other route.
+  async promote({ env, commit, who }) {
+    const e = this.e, repo = e.repo, s = e.store;
+    e.refresh();
+    const rs = e.ruleset;
+    if (rs.error) return { status: 'error', message: rs.error };
+    const cfg = rs.environments.find((x) => x.name === env);
+    if (!cfg) return { status: 'error', message: rs.environments.length ? `no environment named ${env}. Defined: ${rs.environments.map((x) => x.name).join(', ')}` : 'the rules on ' + e.main + ' define no environments' };
+    const by = (who && who.user) || '';
+    if ((usersExist(s) || cfg.promoters || cfg.approvers) && !by) return { status: 'error', message: 'promoting needs to know who you are. Set CANOPY_TOKEN to your token.' };
+    if (cfg.promoters && !cfg.promoters.includes(by)) { s.audit(who, 'promote.denied', env, {});
+      if (e.out) e.out.emit({ kinds: ['security'], branch: cfg.branch, by, title: `Promotion refused: ${by} may not promote to ${env}`, lines: [`Allowed: ${cfg.promoters.join(', ')}`] }); return { status: 'error', message: `${by} may not promote to ${env}. The rules allow: ${cfg.promoters.join(', ')}` }; }
+    const from = cfg.from || e.main;
+    const rev = (r) => tryGit(repo, ['rev-parse', '--verify', '--quiet', r + '^{commit}']);
+    const fromTip = rev('refs/heads/' + from);
+    if (!fromTip) return { status: 'error', message: `the branch ${from}, which ${env} is promoted from, does not exist` };
+    const target = commit ? rev(commit) : fromTip;
+    if (!target) return { status: 'error', message: `no commit ${commit}` };
+    // Not merely reachable from the stage before: one of the states it has actually been in.
+    if (!(tryGit(repo, ['rev-list', '--first-parent', fromTip]) || '').split('\n').includes(target)) return { status: 'error', message: `only commits already on ${from}, as a state ${from} has been in, can be promoted to ${env}` };
+    const ref = 'refs/heads/' + cfg.branch, prev = rev(ref);
+    if (prev === target) return { status: 'nothing', message: `${env} is already at ${target.slice(0, 10)}` };
+    if (prev && !gitOk(repo, ['merge-base', '--is-ancestor', prev, target])) return { status: 'error', message: `${env} is at ${prev.slice(0, 10)}, which is not behind ${target.slice(0, 10)}. An environment only moves forward.` };
+    const id = `env-${env}-${target.slice(0, 10)}`;
+    const base = { v: 1, kind: 'promotion', id, env, branch: cfg.branch, from, commit: target, previous: prev || null, by: by || undefined, rules_hash: rs.hash };
+    const park = (status, reasons, extra = {}) => {
+      const record = { ...base, reasons, ...extra };
+      s.run('insert into promotions(id, env, commit_sha, status, record, ts) values(?,?,?,?,?,?) on conflict(id) do update set status=excluded.status, record=excluded.record, ts=excluded.ts', id, env, target, status, JSON.stringify(record), Date.now());
+      s.event('promotion', { id, env, status, commit: target.slice(0, 10), by });
+      s.audit(who, 'promote.' + status, env, { id, commit: target.slice(0, 12), reasons });
+      if (e.out) e.out.emit({ kinds: [status === 'needs-approval' ? 'approval' : 'blocked'], id, branch: cfg.branch, by, once: `${status}|${id}|${reasons.join('|')}`,
+        title: status === 'needs-approval' ? `Approval needed: promote to ${env}` : `Promotion to ${env} refused`,
+        lines: [`Commit: ${target.slice(0, 10)}`, by ? `Asked for by: ${by}` : '', ...reasons.map((r) => `- ${r}`), ...(status === 'needs-approval' ? [`To approve: canopy approve ${id}`] : [])] });
+      return { status: status === 'needs-approval' ? 'needs-human' : status, id, reasons, record };
+    };
+    const active = activeUsers(s);
+    const rows = s.all('select user, ts from approvals where landing=? and commit_sha=? and rules_hash=? order by ts', id, target, rs.hash).filter((r) => active.has(r.user) && (cfg.approvers || []).includes(r.user));
+    if (cfg.approvals) {
+      const have = cfg.approvers.filter((u) => active.has(u) && (u === by || rows.some((r) => r.user === u)));
+      if (have.length < cfg.approvals) return park('needs-approval', [`promotion to ${env} needs ${cfg.approvals - have.length} more approval${cfg.approvals - have.length > 1 ? 's' : ''} from: ${cfg.approvers.join(', ')}`], { waiting_on: [{ section: env, owners: cfg.approvers, need: cfg.approvals, have, why: 'approves promotions to this environment' }] });
+    }
+    const res = await this.runChecks(target, { checks: cfg.checks, perf: [] }, rs);
+    if (res.failed) return park('blocked', [res.failed], { checks: res.checks });
+    return this.serial(async () => {
+      if (rev(ref) !== prev) return park('blocked', [`${cfg.branch} moved while this promotion was being checked; promote again`]);
+      const record = { ...base, verdict: 'promote', approvals: rows.map((r) => ({ user: r.user, ts: r.ts })), checks: res.checks, sandbox: res.sandbox, events_head: s.eventsHead(), ts: Date.now() };
+      const notes = 'canopy-env-' + env;
+      const noteFile = join(this.home, `note-${id}.json`);
+      writeFileSync(noteFile, signRecord(record, this.key));
+      try { git(repo, ['notes', '--ref=' + notes, 'add', '-f', '-F', noteFile, target]); } finally { rmSync(noteFile, { force: true }); }
+      const undo = () => tryGit(repo, ['notes', '--ref=' + notes, 'remove', target]);
+      const remote = tryGit(repo, ['config', '--get', 'canopy.push']);
+      if (remote && tryGit(repo, ['push', '--atomic', remote, `${target}:${ref}`, `refs/notes/${notes}:refs/notes/${notes}`]) === null) { undo(); return park('blocked', ['the canonical repository refused the promotion']); }
+      const co = worktrees(repo).find((x) => x.branch === cfg.branch && x.path && existsSync(join(x.path, '.git')));
+      const moved = co ? tryGit(co.path, ['merge', '--ff-only', target]) !== null : gitOk(repo, ['update-ref', ref, target, prev || '0'.repeat(40)]);
+      if (!moved && !remote) { undo(); return park('blocked', [`could not move ${cfg.branch} forward locally`]); }
+      s.run('insert into promotions(id, env, commit_sha, status, record, ts) values(?,?,?,?,?,?) on conflict(id) do update set status=excluded.status, record=excluded.record, ts=excluded.ts', id, env, target, 'promoted', JSON.stringify(record), Date.now());
+      s.event('promotion', { id, env, status: 'promoted', commit: target.slice(0, 10), by });
+      s.audit(who, 'promote.promoted', env, { id, commit: target.slice(0, 12), approvals: rows.map((r) => r.user) });
+      if (e.out) e.out.emit({ kinds: ['promotion'], id, branch: cfg.branch, by, title: `Promoted to ${env}`, lines: [`Commit: ${target.slice(0, 10)}`, by ? `By: ${by}` : '', rows.length ? `Approved by: ${rows.map((r) => r.user).join(', ')}` : ''] });
+      return { status: 'promoted', id, env, commit: target, record };
+    });
+  }
+
+  async approvePromotion(id, who) {
+    const s = this.e.store;
+    const row = s.get("select * from promotions where id=? and status='needs-approval'", id);
+    if (!row) return { status: 'error', message: 'no promotion with that id is waiting for approval' };
+    const rec = JSON.parse(row.record);
+    if (!who || !who.user) return { status: 'error', message: 'approving a promotion needs your own token (CANOPY_TOKEN)' };
+    if (rec.by && !activeUsers(s).has(rec.by)) return { status: 'error', message: `${rec.by}, who asked for this promotion, is no longer an active user. Someone else has to run \`canopy promote ${row.env}\`.` };
+    const q = (rec.waiting_on || [])[0];
+    if (!q || !q.owners.includes(who.user)) { s.audit(who, 'approve.denied', id, {}); return { status: 'error', message: `${who.user} may not approve promotions to ${row.env}` }; }
+    s.run("insert or replace into approvals(landing, user, commit_sha, rules_hash, basis, ts) values(?,?,?,?,'',?)", id, who.user, row.commit_sha, rec.rules_hash, Date.now());
+    s.audit(who, 'approve', id, { env: row.env, commit: row.commit_sha.slice(0, 12) });
+    return this.promote({ env: row.env, commit: row.commit_sha, who: { user: rec.by || '', ip: who.ip } });
+  }
+
+  environments() {
+    const e = this.e;
+    return e.ruleset.environments.map((x) => {
+      const tip = tryGit(e.repo, ['rev-parse', '--verify', '--quiet', 'refs/heads/' + x.branch]);
+      const fromTip = tryGit(e.repo, ['rev-parse', '--verify', '--quiet', 'refs/heads/' + (x.from || e.main)]);
+      const behind = tip && fromTip ? Number(tryGit(e.repo, ['rev-list', '--count', '--first-parent', `${tip}..${fromTip}`]) || 0) : null;
+      return { name: x.name, branch: x.branch, from: x.from || e.main, at: tip, behind, promoters: x.promoters, approvers: x.approvers, approvals: x.approvals, checks: x.checks };
+    });
   }
 }

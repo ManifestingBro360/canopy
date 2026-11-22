@@ -7,7 +7,11 @@ import { openStore } from './store.mjs';
 import { Engine } from './engine.mjs';
 import { Gate } from './gate.mjs';
 import { loadOrCreateKey } from './sign.mjs';
-import { worktreeOf } from './git.mjs';
+import { worktreeOf, lsTree, showFile } from './git.mjs';
+import { identify, usersExist } from './access.mjs';
+import { parseManifest, isManifest, lookup } from './advisories.mjs';
+import { Notifier, listChannels } from './notify.mjs';
+import { basename } from 'node:path';
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..', 'ui', 'index.html');
 
@@ -33,6 +37,7 @@ export async function serve({ cwd, port = Number(process.env.CANOPY_PORT) || 771
   const t0 = performance.now();
   const engine = new Engine({ repo: p.top, common: p.common, home: p.home, store, pub: key.pub });
   const indexMs = Math.round(performance.now() - t0);
+  engine.out = new Notifier(store, () => engine.ruleset, basename(p.top));
   const gate = new Gate(engine, key, p.home);
   const token = process.env.CANOPY_TOKEN || null;
   const lat = [];
@@ -58,15 +63,22 @@ export async function serve({ cwd, port = Number(process.env.CANOPY_PORT) || 771
       const origin = req.headers.origin;
       if (origin && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) return send(res, 403, { error: 'bad origin' });
       if (req.method === 'POST' && !String(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, { error: 'json only' });
-      if (token && url.pathname !== '/' && req.headers.authorization !== 'Bearer ' + token) return send(res, 401, { error: 'token required' });
+      // Who is asking. A valid user token also satisfies the single shared token of 0.1.
+      const who = identify(store, req);
+      const strict = usersExist(store);
+      if (token && url.pathname !== '/' && !who.user && req.headers.authorization !== 'Bearer ' + token) return send(res, 401, { error: 'token required' });
+      const needUser = () => (strict && !who.user ? (send(res, 401, { error: 'this canopyd has users: send your own token (CANOPY_TOKEN)' }), true) : false);
 
       if (req.method === 'POST' && url.pathname === '/hook') {
+        // Once users exist, an event from nobody is not recorded. The harness
+        // carries on (hooks fail open) and the gate sees the work as unwitnessed.
+        if (needUser()) return;
         const body = await readBody(req);
         // Tool output is not kept. Only search tools' results are looked at, for the file paths in them.
         if (body && body.tool_name !== 'Grep' && body.tool_name !== 'Glob') delete body.tool_response;
         const a = performance.now();
         let out = {};
-        try { out = engine.handle(body); } catch (e) { if (!quiet) console.error('[canopy] hook error:', e.message); }
+        try { out = engine.handle(body, who); } catch (e) { if (!quiet) console.error('[canopy] hook error:', e.message); }
         lat.push(performance.now() - a); if (lat.length > 5000) lat.shift();
         return send(res, 200, out);
       }
@@ -76,6 +88,34 @@ export async function serve({ cwd, port = Number(process.env.CANOPY_PORT) || 771
         if (url.pathname === '/api/file') return send(res, 200, engine.fileView(url.searchParams.get('path') || '') || { error: 'unknown file' });
         if (url.pathname === '/api/why') return send(res, 200, engine.why(url.searchParams.get('target') || ''));
         if (url.pathname === '/api/pending') return send(res, 200, gate.pending());
+        if (url.pathname === '/api/whoami') return send(res, 200, { user: who.user, role: who.role, users: strict });
+        if (url.pathname === '/api/environments') return send(res, 200, gate.environments());
+        if (url.pathname === '/api/channels') return send(res, 200, { channels: listChannels(store), routes: engine.ruleset.notify, sent: engine.out.sent, failed: engine.out.failed });
+        if (url.pathname === '/api/catchup') {
+          const w = worktreeOf(url.searchParams.get('cwd') || '');
+          if (!w || w.common !== p.common) return send(res, 200, { error: 'not a worktree of this repository' });
+          engine.refresh();
+          const items = engine.catchup(w.top, url.searchParams.get('path') || '');
+          return send(res, 200, { items, text: items.length ? engine.catchupText(items, 40) : '' });
+        }
+        if (url.pathname === '/api/audit') {
+          // The log holds addresses and names: once users exist, only an administrator reads it.
+          if (strict && who.role !== 'admin') return send(res, 403, { error: 'the audit log is for administrators' });
+          const n = Math.min(Number(url.searchParams.get('limit')) || 100, 1000), user = url.searchParams.get('user');
+          const rows = user ? store.all('select seq, ts, user, ip, action, target, detail from audit where user=? order by seq desc limit ?', user, n)
+            : store.all('select seq, ts, user, ip, action, target, detail from audit order by seq desc limit ?', n);
+          return send(res, 200, rows.map((r) => ({ ...r, detail: JSON.parse(r.detail || '{}') })));
+        }
+        if (url.pathname === '/api/advisories') {
+          // Sends package names and versions to OSV.dev, so only when the rules on main ask for it.
+          if (!engine.ruleset.advisories) return send(res, 200, { error: 'advisories are off. Add "advisories": { "source": "osv" } to .canopy/rules.json on ' + engine.main + ' to turn them on.' });
+          const deps = new Map();
+          for (const f of lsTree(p.top, engine.graph.rev).map((x) => x.path).filter(isManifest)) {
+            for (const d of parseManifest(f, showFile(p.top, engine.graph.rev, f) || '')) deps.set(d.ecosystem + d.name + d.version, { ...d, manifest: f });
+          }
+          const r = await lookup([...deps.values()]);
+          return send(res, 200, { checked: deps.size, ...r });
+        }
         if (url.pathname === '/api/stats') {
           const s = [...lat].sort((x, y) => x - y);
           const pct = (q) => (s.length ? Math.round(s[Math.min(s.length - 1, Math.floor(q * s.length))] * 1000) / 1000 : 0);
@@ -98,14 +138,26 @@ export async function serve({ cwd, port = Number(process.env.CANOPY_PORT) || 771
       }
       if (req.method === 'POST') {
         const body = await readBody(req);
-        if (url.pathname === '/api/land') return send(res, 200, await gate.land({ cwd: body.cwd, intent: body.intent }));
-        if (url.pathname === '/api/approve') return send(res, 200, await gate.approve(body.id, body.token, body.by));
+        if (url.pathname === '/api/land') return send(res, 200, await gate.land({ cwd: body.cwd, intent: body.intent, who }));
+        if (url.pathname === '/api/approve') {
+          // The map's approval box sends the approver's token in the body.
+          let approver = who;
+          if (!approver.user && typeof body.token === 'string' && body.token.startsWith('cnp_')) approver = identify(store, { socket: req.socket, headers: { ...req.headers, authorization: 'Bearer ' + body.token } });
+          return send(res, 200, await gate.approve(body.id, { who: approver, token: body.token, by: body.by }));
+        }
+        if (url.pathname === '/api/promote') return send(res, 200, await gate.promote({ env: String(body.env || ''), commit: body.commit ? String(body.commit) : undefined, who }));
+        if (url.pathname === '/api/checkin') { if (needUser()) return; return send(res, 200, await engine.checkin({ cwd: String(body.cwd || ''), model: body.model, harness: body.harness }, who)); }
         // Releasing drops holds and the in-flight record. It does not forget that outside content was taken in.
-        if (url.pathname === '/api/release') { const w = worktreeOf(body.cwd || ''); if (w && w.common === p.common) engine.clearWorktree(w.top, true); return send(res, 200, { ok: !!w }); }
-        if (url.pathname === '/api/clear-taint') {
-          if (!gate.isHuman(body.token)) return send(res, 200, { status: 'error', message: 'clearing taint needs the human token' });
+        if (url.pathname === '/api/release') {
+          if (needUser()) return;
           const w = worktreeOf(body.cwd || '');
-          if (w && w.common === p.common) store.run('delete from taint where worktree=?', w.top);
+          if (w && w.common === p.common) { engine.release(w.top); store.audit(who, 'release', engine.wtName(w.top), {}); }
+          return send(res, 200, { ok: !!w });
+        }
+        if (url.pathname === '/api/clear-taint') {
+          if (strict ? who.role !== 'admin' : !gate.isHuman(body.token)) return send(res, 200, { status: 'error', message: strict ? 'clearing taint needs an administrator\'s token' : 'clearing taint needs the human token' });
+          const w = worktreeOf(body.cwd || '');
+          if (w && w.common === p.common) { store.run('delete from taint where worktree=?', w.top); store.audit(who, 'taint.clear', engine.wtName(w.top), {}); }
           return send(res, 200, { status: 'ok' });
         }
         if (url.pathname === '/api/refresh') return send(res, 200, engine.refresh());

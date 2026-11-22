@@ -19,6 +19,27 @@
 
 <p align="center"><a href="https://theprojectsierra.ai/canopy/">Website</a> · <a href="docs/DESIGN.md">Design</a> · <a href="docs/TEST-REPORT.md">Test report</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
 
+![How Canopy works: two agents in separate worktrees; one changes a function the other calls and the second is told at once; each change passes a five-stage gate; only signed changes move main and then staging and production](assets/how-it-works.svg)
+
+## By design
+
+- **It spends as little of an agent's context as it can.** An agent is told
+  only what touches its own work, in a line or two: a notice when its ground
+  shifts, a section's rules on first entry (83 to 339 characters in our tests),
+  and on return a digest of what others changed with the lines to re-read
+  (under 420 characters per function) instead of the whole file again.
+- **Quality and security are enforced, not requested.** Checks, owners, model
+  rules and approvals are applied at the gate from rules on `main`. Nothing an
+  agent is told in a prompt is relied on.
+- **It gets stricter where your team tells it to.** Every rule you add (an
+  owner, a check, a model tier, an environment) applies from the next landing,
+  and every landing leaves a signed record you can learn from.
+- **People are told where they already are.** Approvals and alerts go to
+  Slack, Discord or any webhook. Nobody has to watch a dashboard.
+
+Your team works on the product. The record, the gate and the rules are
+Canopy's job.
+
 ![The Canopy map: a repository drawn as blocks, with the branches being worked on and a feed of landings](docs/map.jpg)
 
 ## Why
@@ -179,6 +200,14 @@ When the work is committed, the agent (or you) runs `canopy land`.
 | `canopy clear-taint` | A person clears the outside-content mark on this worktree. Nothing else clears it while the worktree exists |
 | `canopy protect <bare-repo>` | Make a canonical repo accept `main` only through signed landings |
 | `canopy stats` | Hook latency, index size |
+| `canopy catchup [path]` | What changed on `main` since this worktree last saw it, who changed it and why, and which lines to re-read |
+| `canopy user add <name> [--admin]`, `user list`, `user disable <name>` | People and their tokens. Run on the Canopy host; the token is printed once |
+| `canopy whoami`, `canopy audit [--user name]` | Who canopyd thinks you are; who did what, when and from where (administrators) |
+| `canopy envs`, `canopy promote <env> [--commit sha]` | Environments, and moving one forward |
+| `canopy advisories` | Known vulnerabilities in `main`'s dependencies, if switched on |
+| `canopy notify add <name> <webhook-url>`, `notify list`, `notify test <name>` | Where approvals and alerts are sent. Run on the Canopy host |
+| `canopy checkin [--harness h] [--model m]` | For a harness with no hooks: record your work and print what you should know |
+| `canopy hook --harness h` | Forward one hook event from standard input (the Codex adapter) |
 
 ## Rules
 
@@ -226,6 +255,115 @@ files, `Makefile`, `.github/**`, `.canopy/**`, `.claude/**` and similar) are
 protected by default, and so is removing lines from existing tests. A branch
 cannot lower the bar it is judged against.
 
+## People, owners and models
+
+Everything in this section is off until you use it. A repository with no
+users and none of these keys behaves as described above.
+
+**Users.** On the Canopy host, `canopy user add asha --admin` prints a token
+once and stores only its hash. Asha sets it as `CANOPY_TOKEN` for herself and
+for her agents. Once one user exists, hook events, landings, approvals and
+promotions all need a valid token, and the single shared approval token stops
+working. Every landing record then names who landed it, who approved it, and
+the harness and model of each session that wrote it.
+
+**Policy** lives in `.canopy/rules.json` on `main`, so it is reviewed and
+protected like the rest of the rules:
+
+```json
+{
+  "version": 1,
+  "teams": { "payments": ["asha", "ben"], "release": ["asha", "carol"] },
+  "model_tiers": { "strong": ["claude-fable-*", "claude-opus-*", "gpt-5*"] },
+  "rules": [
+    { "path": "", "checks": ["npm test"] },
+    { "path": "src/payments/", "owners": ["@payments"], "approvals": 1,
+      "guard_dependents": true, "models": ["strong"] },
+    { "path": "infra/", "writers": ["carol"] }
+  ],
+  "manager": { "cmd": "node /opt/canopy/managers/claude-code.mjs", "when": "flagged" },
+  "advisories": { "source": "osv", "on_new": "review" },
+  "environments": [
+    { "name": "staging", "branch": "staging", "promoters": ["@release"] },
+    { "name": "production", "branch": "production", "promoters": ["@release"],
+      "approvers": ["asha", "ben"], "approvals": 2, "checks": ["npm run smoke"] }
+  ],
+  "notify": [
+    { "channel": "eng", "on": ["approval", "blocked"] },
+    { "channel": "security", "on": ["security"], "paths": ["src/payments/", "src/auth/"] }
+  ]
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `owners`, `approvals` | Anyone may change the section; it lands only when that many owners have approved the exact commit under the exact rules. An owner who lands a change counts as one. A file inside two owned sections needs both |
+| `guard_dependents` | The owners are also asked when a change made elsewhere alters the signature of something their section's code depends on |
+| `writers` | Only these people (and the owners) may change the section at all. Refused when the agent tries to edit, and again at the gate. A writer who merges someone else's branch and lands it answers for it |
+| `models` | Tier names or name patterns. A session running another model is refused when it tries to edit. A change written there by an unlisted or unknown model, or one that arrived through a shell command, a merge or a script (so Canopy cannot say which model wrote it), needs a person |
+| `manager` | A command that gives a second opinion: it reads a dossier (facts and diff) on standard input and prints `{"verdict": "pass" \| "concern" \| "block", ...}`. `concern` asks for a person, `block` refuses. `when` is `flagged` (changes that already need someone) or `always` |
+| `advisories` | Looks up dependencies a change adds or moves in [OSV.dev](https://osv.dev). `on_new` is `note`, `review` or `block`. Reads `package-lock.json`, `requirements*.txt`, `go.mod` and `Cargo.lock` |
+| `environments` | Branches that move only by `canopy promote`: forward only, only to commits the stage before has (`from`, by default the previous entry, or `main`), only by `promoters`, after `approvals` from `approvers` and after `checks` pass |
+
+| `notify` | Which events go to which named channel: `approval` (a landing or promotion is waiting for someone), `security` (outside content, a vulnerable dependency, a manager's refusal, someone reaching past their access), `blocked`, `landed`, `promotion`. `paths` narrows a route to changes under those folders |
+
+**Notifications.** A channel's webhook address is a credential, so it is given
+to canopyd on its host and never written in the repository:
+
+```bash
+canopy notify add eng https://hooks.slack.com/services/...
+canopy notify add security https://discord.com/api/webhooks/...
+canopy notify test eng
+```
+
+Slack and Discord addresses are recognised and sent in their own format; any
+other address receives JSON (`title`, `lines`, `kinds`, `id`, `branch`, `by`,
+`waiting_on`). A message carries the branch, the stated purpose, who asked,
+the reasons, who is being waited on, and the command to approve. It never
+carries code. The same event is said once, text taken from branches cannot
+ping a channel, and a webhook that is down never holds a landing.
+
+Things a person other than the lander must settle (protected files, outside
+content, a manager's concern, an unlisted model) can be approved by an
+administrator, or, when the whole change lies inside owned sections, by one
+of their owners. Never by the person who landed the change or anyone whose
+session wrote it. An approval covers one commit, one version of the rules and
+one set of reasons; if any of them changes it has to be given again, and an
+approval from someone who is no longer an active user stops counting.
+
+**The manager can only tighten.** Nothing it prints can turn a refusal into a
+landing, and anything other than a clear verdict is treated as "ask a person".
+Canopy calls no model itself: the adapters in `managers/` wrap Claude Code
+(`claude -p`, no tools), Codex (`codex exec`) and any OpenAI-compatible server
+(Ollama, vLLM, LM Studio, hosted gateways), so open-source models work the
+same way. They take `CANOPY_MANAGER_MODEL`, `CANOPY_MANAGER_URL` and
+`CANOPY_MANAGER_KEY` from canopyd's environment. The adapters have been tested
+with stand-in commands, not against live models. The manager runs in an empty
+directory, never in the repository. The Claude Code and OpenAI-compatible
+adapters give the model no tools; Codex cannot be run that way, so its adapter
+is for repositories whose contributors you trust (see SECURITY.md).
+
+**Catching up.** Canopy remembers which version of each function a worktree
+last read in full or wrote. When others land changes to those functions, the
+worktree's agent gets one line per function: what changed, who landed it and
+why, and the line range to re-read. `canopy catchup` prints the same at any
+time, and a new session in that worktree is told when it starts.
+
+## Other harnesses
+
+```bash
+canopy init                      # Claude Code: HTTP hooks in .claude/settings.json
+canopy init --harness codex      # Codex: command hooks in .codex/hooks.json calling `canopy hook`
+canopy init --harness generic    # anything else: a section in AGENTS.md telling the agent to run `canopy checkin`
+```
+
+With hooks, edits are checked before they happen and notices arrive inside
+the agent's next tool call. With `checkin` only, writes are taken from Git
+when the agent checks in and notices arrive then; reads are not recorded. The
+landing gate, owners, model rules and environments apply in full either way.
+The Codex adapter was written from Codex's hook documentation and has not been
+run against Codex itself.
+
 ## Hook contract
 
 canopyd accepts Claude Code hook payloads at `POST /hook` (JSON). It uses
@@ -267,6 +405,19 @@ Other endpoints: `GET /api/state`, `GET /api/events` (server-sent events),
 - **Stale assumptions block.** If `main` changed a signature since a branch
   forked and code that branch changed uses it, the landing is refused until
   the branch merges `main`. Tests may not cover a call the agent just wrote.
+- **Who and which model.** A person is known by a token canopyd issued; that
+  is as strong as the token's secrecy. The harness and model names are what the
+  harness reported. Canopy uses them to route a change to a person, never as
+  proof, and says "unknown" when nothing was reported.
+- **Addresses.** The address each request came from is written to canopyd's
+  audit log (`canopy audit`), which is hash-chained and stays on the Canopy
+  host. It is never written into the signed records that travel with the
+  repository. canopyd listens on the loopback address only, so today that
+  address is always `127.0.0.1`; it becomes useful when a remote mode exists.
+- **What leaves the machine.** Nothing by default. With `advisories` on,
+  package names and versions go to OSV.dev. With `notify` routes and channels
+  set, branch names, purposes, people's names and reasons go to the chat
+  services you chose. Code and diffs are never sent by either.
 - **Pushing by hand.** With `git config canopy.push <remote>` canopyd pushes
   `main` and the landing records together. If you push `main` yourself, push
   `refs/notes/canopy` in the same command or the canonical repository will
@@ -278,7 +429,7 @@ Other endpoints: `GET /api/state`, `GET /api/events` (server-sent events),
 Environment: `CANOPY_PORT`, `CANOPY_HOME` (state and key directory for one
 repository; default `.git/canopy`; canopyd refuses a directory that already
 holds another repository's state), `CANOPY_TOKEN` (optional bearer token for the API),
-`CANOPY_HUMAN_TOKEN`.
+`CANOPY_HUMAN_TOKEN`, `CANOPY_OSV_URL` (another OSV-compatible endpoint), `CANOPY_TRUST_PROXY=1` (take the caller's address from `X-Forwarded-For`).
 
 ## Layout
 
@@ -289,13 +440,18 @@ src/graph.mjs         code graph of main
 src/engine.mjs        hooks -> reads, writes, holds, notices, taint
 src/gate.mjs          analysis, sandboxed checks, signing, landing
 src/rules.mjs         section rules
+src/access.mjs        users, tokens, who is asking
+src/advisories.mjs    dependency lookups in OSV.dev
+src/manager.mjs       the second-opinion step
+managers/             manager adapters: Claude Code, Codex, OpenAI-compatible
+src/notify.mjs        webhooks to Slack, Discord and others
 src/sign.mjs          Ed25519 records
 src/server.mjs        HTTP server
 hooks/pre-receive.mjs verifier for the canonical repository
 ui/index.html         the live map
 demo/demo.mjs         scripted demo
 docs/                 design, review log, test report
-assets/               logo
+assets/               logo, how-it-works animation
 ```
 
 ## Licence

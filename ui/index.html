@@ -6,24 +6,25 @@
 <title>Canopy</title>
 <style>
 :root {
-  --ground: #E7ECE4; --surface: #F6F8F3; --ink: #1B2A2E; --muted: #5C6D6E; --line: #BDC8BC;
-  --block: #CBD5C8; --slab: #DCE3D8; --ok: #17855F; --bad: #B93A22; --wait: #A8700B;
-  --shadow: 0 1px 2px rgba(27,42,46,.10), 0 8px 24px rgba(27,42,46,.08);
+  --ground: #FBFAF7; --surface: #FFFFFF; --ink: #16130F; --muted: #6B655C; --line: #E7E3DA;
+  --block: #DBD7CD; --slab: #EFECE4; --ok: #0F7A55; --bad: #C2412D; --wait: #A96D05; --tint: #F4F1EA;
+  --shadow: 0 1px 2px rgba(22,19,15,.06), 0 8px 24px rgba(22,19,15,.06);
+  --sans: "Geist", "Inter", "Helvetica Neue", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --ground: #15232A; --surface: #1C2E36; --ink: #E3ECE6; --muted: #8DA2A1; --line: #36515B;
-  --block: #3A5A64; --slab: #1A2B33; --ok: #4CC79A; --bad: #F0745A; --wait: #E9B04C;
-  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+  --ground: #0E0D0B; --surface: #171512; --ink: #EDE9E0; --muted: #9A9388; --line: #2C2823;
+  --block: #3A362F; --slab: #1B1916; --ok: #4CC79A; --bad: #F0745A; --wait: #E9B04C; --tint: #1E1B17;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
 } }
 :root[data-theme="dark"] {
-  --ground: #15232A; --surface: #1C2E36; --ink: #E3ECE6; --muted: #8DA2A1; --line: #36515B;
-  --block: #3A5A64; --slab: #1A2B33; --ok: #4CC79A; --bad: #F0745A; --wait: #E9B04C;
-  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+  --ground: #0E0D0B; --surface: #171512; --ink: #EDE9E0; --muted: #9A9388; --line: #2C2823;
+  --block: #3A362F; --slab: #1B1916; --ok: #4CC79A; --bad: #F0745A; --wait: #E9B04C; --tint: #1E1B17;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
-body { background: var(--ground); color: var(--ink); font: 14px/1.45 "Avenir Next", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; overflow: hidden; }
-code, .path { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+body { background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); overflow: hidden; }
+code, .path, .mono { font-family: var(--mono); font-size: 12.5px; }
 canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 canvas.drag { cursor: grabbing; }
 button { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; }
@@ -31,17 +32,21 @@ button:hover { border-color: var(--muted); }
 button:focus-visible, .row:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 
-header { position: fixed; top: 0; left: 0; right: 0; display: flex; align-items: baseline; gap: 22px; padding: 14px 20px; pointer-events: none; flex-wrap: wrap; }
-header > * { pointer-events: auto; }
-.mark { font-size: 21px; font-weight: 650; letter-spacing: -0.02em; }
-.repo { color: var(--muted); }
-.counts { display: flex; gap: 20px; margin-left: auto; flex-wrap: wrap; }
-.counts b { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; margin-right: 5px; }
+header { position: fixed; top: 0; left: 0; right: 0; z-index: 4; display: flex; align-items: center; gap: 18px; padding: 0 20px; height: 52px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.mark { display: inline-flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.repo { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+nav.tabs { display: flex; gap: 2px; align-self: stretch; margin-left: 6px; }
+nav.tabs button { border: 0; border-radius: 0; background: none; padding: 0 12px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+nav.tabs button:hover { color: var(--ink); }
+nav.tabs button[aria-current="page"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+nav.tabs .n { font: 600 11px var(--mono); background: var(--wait); color: var(--surface); border-radius: 9px; padding: 1px 6px; margin-left: 6px; }
+.counts { display: flex; gap: 18px; margin-left: auto; font-size: 13px; white-space: nowrap; }
+.counts b { font-weight: 650; font-variant-numeric: tabular-nums; margin-right: 5px; color: var(--ink); }
 .counts span { color: var(--muted); }
 .live { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; margin-right: 6px; }
 .live.off { background: var(--bad); }
 
-.panel { position: fixed; top: 62px; width: 300px; max-height: calc(100vh - 130px); overflow: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+.panel { position: fixed; top: 68px; width: 300px; max-height: calc(100vh - 130px); overflow: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
 #agents { left: 20px; }
 #side { right: 20px; width: 340px; }
 .panel h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0; padding: 12px 14px 6px; }
@@ -51,6 +56,7 @@ header > * { pointer-events: auto; }
 .row[aria-pressed="true"] { background: color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); }
 .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
 .name { font-weight: 600; }
+.who { color: var(--ink); font-weight: 500; }
 .sub { color: var(--muted); font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tags { margin-top: 5px; display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; }
 .tag { border: 1px solid var(--line); border-radius: 20px; padding: 0 8px; color: var(--muted); }
@@ -75,10 +81,54 @@ dialog { background: var(--surface); color: var(--ink); border: 1px solid var(--
 dialog::backdrop { background: rgba(10,20,24,.45); }
 dialog input { width: 100%; font: inherit; padding: 7px 9px; margin: 6px 0 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--ground); color: var(--ink); }
 dialog .acts { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Views other than the map */
+.page { position: fixed; inset: 52px 0 0 0; overflow: auto; background: var(--ground); z-index: 3; }
+.page[hidden] { display: none; }
+.page .in { max-width: 1120px; margin: 0 auto; padding: 28px 24px 64px; }
+.page h1 { font-size: 24px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 4px; }
+.page .lede { color: var(--muted); max-width: 70ch; margin: 0 0 22px; font-size: 15px; }
+.page h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 30px 0 10px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.card .k { color: var(--muted); font-size: 12.5px; }
+.card .v { font-size: 24px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.card .v small { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 4px; letter-spacing: 0; }
+.card .d { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+.box .empty { padding: 18px; }
+table.t { border-collapse: collapse; width: 100%; font-size: 13px; }
+.t th, .t td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.t tr:last-child td { border-bottom: 0; }
+.t th { font-weight: 500; color: var(--muted); font-size: 12px; background: var(--tint); white-space: nowrap; }
+.t td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.t .sub { -webkit-line-clamp: 3; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; background: var(--muted); }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.wait { background: var(--wait); }
+.pill { display: inline-block; border: 1px solid var(--line); border-radius: 20px; padding: 0 8px; font-size: 12px; color: var(--muted); white-space: nowrap; margin: 0 4px 3px 0; }
+.pill.warn { color: var(--wait); border-color: var(--wait); } .pill.bad { color: var(--bad); border-color: var(--bad); } .pill.ok { color: var(--ok); border-color: var(--ok); }
+/* The gate strip: one landing's passage through the gate, stage by stage. */
+.strip { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 22px; gap: 3px; vertical-align: middle; }
+.strip i { height: 8px; border-radius: 2px; background: var(--line); }
+.strip i.ok { background: var(--ok); } .strip i.bad { background: var(--bad); } .strip i.wait { background: var(--wait); }
+.stripkey { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin: 8px 2px 0; }
+.meter { display: inline-block; width: 64px; height: 6px; border-radius: 3px; background: var(--line); vertical-align: middle; margin-right: 7px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--ok); }
+.bars { display: flex; align-items: flex-end; gap: 4px; height: 96px; padding: 14px 16px 10px; }
+.bars i { flex: 1; max-width: 22px; min-height: 2px; background: var(--ink); border-radius: 2px 2px 0 0; opacity: .85; }
+.bars i.bad { background: var(--bad); } .bars i.wait { background: var(--wait); }
+/* The rail: main and the environments after it. */
+.rail { display: flex; align-items: stretch; gap: 0; padding: 18px 16px; overflow-x: auto; }
+.stop { min-width: 180px; flex: 1; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--ground); }
+.stop b { display: block; font-size: 15px; }
+.join { align-self: center; min-width: 54px; text-align: center; color: var(--muted); font-size: 12px; border-top: 2px solid var(--line); margin: 0 6px; padding-top: 4px; white-space: nowrap; }
+.join.behind { border-top-color: var(--wait); color: var(--wait); }
+body[data-view]:not([data-view="visibility"]) .panel, body[data-view]:not([data-view="visibility"]) footer, body[data-view]:not([data-view="visibility"]) .legend { display: none; }
 @media (max-width: 860px) {
   body { overflow: auto; }
   canvas { position: relative; height: 62vh; inset: auto; }
-  header { position: static; } .counts { margin-left: 0; }
+  header { position: sticky; height: auto; flex-wrap: wrap; padding: 8px 16px; gap: 8px 14px; } .counts { display: none; } nav.tabs { order: 3; width: 100%; overflow-x: auto; margin: 0; } nav.tabs button { padding: 8px 10px; }
+  .page { position: static; } canvas { margin-top: 0; }
   .panel { position: static; width: auto !important; max-height: none; margin: 12px 16px; }
   footer, .legend { position: static; margin: 12px 16px; }
 }
@@ -87,10 +137,14 @@ dialog .acts { display: flex; gap: 8px; justify-content: flex-end; }
 <body>
 <canvas id="c" aria-label="Live map of the codebase. Blocks are files; colour shows which branch is changing them."></canvas>
 <header>
-  <span class="mark">Canopy</span>
+  <span class="mark"><svg viewBox="0 0 64 64" width="24" height="24" aria-hidden="true"><path d="M10 18 32 6v24z" fill="#19A974"/><path d="M54 18 32 6v24z" fill="#F2B441"/><path d="M10 27l22 12v20L10 47z" fill="currentColor"/><path d="M54 27 32 39v20l22-12z" fill="currentColor" opacity=".55"/></svg>Canopy</span>
   <span class="repo"><span class="live" id="live"></span><span id="repo">connecting</span></span>
+  <nav class="tabs" aria-label="Views" id="tabs">
+    <button data-tab="visibility">Visibility</button><button data-tab="security">Security</button><button data-tab="performance">Performance</button><button data-tab="quality">Quality</button><button data-tab="outcome">Outcome</button>
+  </nav>
   <div class="counts" id="counts"></div>
 </header>
+<main class="page" id="page" hidden></main>
 <section class="panel" id="agents" aria-label="Branches being worked on"></section>
 <section class="panel" id="side" aria-label="Activity"></section>
 <footer>
@@ -401,12 +455,14 @@ try { const t = localStorage.getItem('canopy-theme'); if (t) document.documentEl
 function renderAgents() {
   const by = new Map();
   for (const s of S.sessions) {
-    if (!by.has(s.branch)) by.set(s.branch, { branch: s.branch, wt: s.wt, task: '', active: false, taint: [], n: 0, seen: 0 });
+    if (!by.has(s.branch)) by.set(s.branch, { branch: s.branch, wt: s.wt, task: '', active: false, taint: [], n: 0, seen: 0, who: new Set() });
     const a = by.get(s.branch);
+    // Who the session acts for and which model it runs, as the harness reported them.
+    if (s.user || s.model) a.who.add([s.user, s.model].filter(Boolean).join(' with '));
     a.task ||= s.task; a.active ||= s.active; a.seen = Math.max(a.seen, s.seen); a.n++;
     for (const t of s.taint) if (!a.taint.includes(t)) a.taint.push(t);
   }
-  for (const w of S.writes) if (!by.has(w.branch)) by.set(w.branch, { branch: w.branch, wt: w.wt, task: '', active: false, taint: [], n: 0, seen: w.ts });
+  for (const w of S.writes) if (!by.has(w.branch)) by.set(w.branch, { branch: w.branch, wt: w.wt, task: '', active: false, taint: [], n: 0, seen: w.ts, who: new Set() });
   // Show a branch while a session is attached to it or it has unlanded changes.
   const inflight = new Set(S.writes.map((w) => w.branch));
   const rows = [...by.values()].filter((a) => a.active || inflight.has(a.branch)).sort((a, b) => b.seen - a.seen);
@@ -417,6 +473,7 @@ function renderAgents() {
     const notices = S.notices.filter((n) => n.open && n.target === a.wt).length;
     return `<button class="row" data-branch="${esc(a.branch)}" aria-pressed="${focus === a.branch}">
       <span class="sw" style="background:${colour(a.branch)}"></span><span class="name">${esc(a.branch)}</span><span class="when">${a.active ? 'active' : ago(a.seen) + ' ago'}</span>
+      ${a.who.size ? `<div class="sub who">${esc([...a.who].slice(0, 3).join(', '))}</div>` : ''}
       <div class="sub">${esc(a.task || 'No task recorded yet')}</div>
       <div class="tags">${changing ? `<span class="tag">changing ${changing} file${changing > 1 ? 's' : ''}</span>` : ''}${notices ? `<span class="tag warn">${notices} open notice${notices > 1 ? 's' : ''}</span>` : ''}${a.taint.length ? `<span class="tag warn" title="${esc(a.taint.join(', '))}">read outside content</span>` : ''}</div>
     </button>`;
@@ -439,9 +496,10 @@ function renderSide() {
   }
   const items = [
     ...S.landings.map((l) => ({ ts: l.ts, html: `<div class="item"><span class="when">${ago(l.ts)} ago</span><span class="st ${l.status}">${WORD[l.status] || esc(l.status)}</span> <span class="sw" style="background:${colour(l.branch)};margin-left:6px"></span>${esc(l.branch)}
-      <div class="sub">${esc(l.intent || '')}</div>
+      <div class="sub">${esc(l.intent || '')}${l.by ? ` <span class="who">by ${esc(l.by)}</span>` : ''}</div>
       <div class="tags"><span class="tag">read ${Math.round((l.coverage ?? 1) * 100)}% of what it affects</span>${(l.taint || []).length ? '<span class="tag warn">outside content</span>' : ''}</div>
       ${(l.reasons || []).length ? `<div class="sub" style="-webkit-line-clamp:4">${esc(l.reasons[0])}</div>` : ''}
+      ${l.status === 'needs-human' && (l.waiting || []).length ? `<div class="sub" style="-webkit-line-clamp:4">Waiting on ${l.waiting.map((q) => `${q.token ? 'anyone holding the approval token' : esc(q.kind === 'person' ? 'a person' : q.section || 'the whole repository') + ': ' + esc(q.owners.join(', ') || 'no one eligible yet')}`).join('; ')}</div>` : ''}
       ${l.status === 'needs-human' ? `<div style="margin-top:8px"><button data-approve="${esc(l.id)}">Approve landing</button></div>` : ''}</div>` })),
     ...S.notices.filter((n) => n.severity === 'high').slice(0, 30).map((n) => ({ ts: n.ts, html: `<div class="item"><span class="when">${ago(n.ts)} ago</span><span class="st ${n.kind === 'landed' ? 'low' : n.severity}">${n.kind === 'landed' ? 'Landed change reaches' : n.kind === 'retracted' ? 'Change undone for' : 'Change in flight reaches'}</span> ${esc(n.target)}
       <div class="sub" style="-webkit-line-clamp:3">${esc(n.body)}</div></div>` })),
@@ -463,26 +521,154 @@ async function select(b) {
   if (S) renderSide();
 }
 function approve(id) {
-  const l = S.landings.find((x) => x.id === id), d = $('dlg');
-  d.innerHTML = `<h2 style="margin:0 0 6px;font-size:17px">Approve landing of ${esc(l.branch)}</h2>
+  const l = S.landings.find((x) => x.id === id) || PENDING.find((x) => x.id === id) || { branch: id, reasons: [] }, d = $('dlg');
+  d.innerHTML = `<h2 style="margin:0 0 6px;font-size:17px">Approve ${esc(l.branch)}</h2>
     <div class="sub" style="-webkit-line-clamp:8;margin-bottom:10px">${(l.reasons || []).map(esc).join('<br>')}</div>
-    <label>Your name<input id="by" autocomplete="name"></label><label>Approval token<input id="tok" type="password" autocomplete="off"></label>
+    <label>Your name<input id="by" autocomplete="name"></label><label>Your Canopy token<input id="tok" type="password" autocomplete="off"></label>
+    <div class="sub" style="margin-bottom:6px">Your own token if this repository has users; otherwise the shared approval token.</div>
     <div id="err" class="sub" style="color:var(--bad)"></div><div class="acts"><button id="no">Cancel</button><button id="yes">Approve landing</button></div>`;
   d.showModal();
   $('no').onclick = () => d.close();
   $('yes').onclick = async () => {
     const r = await (await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, token: $('tok').value, by: $('by').value || 'human' }) })).json();
-    if (r.status === 'landed') { d.close(); load(); } else $('err').textContent = r.message || (r.reasons || []).join('; ') || 'Not landed: ' + r.status;
+    if (r.status === 'landed' || r.status === 'promoted') { d.close(); load(); } else $('err').textContent = r.message || (r.reasons || []).join('; ') || 'Not landed: ' + r.status;
   };
 }
 
 // ---- data ------------------------------------------------------------------
+// ---- views -----------------------------------------------------------------
+// One question per view. Visibility is the map; the others are read from the
+// same record, so every number here can be traced to a landing.
+let tab = 'visibility', STATS = null, ENVS = [], PENDING = [], WHO = null, AUDIT = null, CH = null;
+const TABS = ['visibility', 'security', 'performance', 'quality', 'outcome'];
+const card = (k, v, d = '') => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${d ? `<div class="d">${d}</div>` : ''}</div>`;
+const table = (heads, rows, empty) => `<div class="box">${rows.length ? `<table class="t"><thead><tr>${heads.map((h) => `<th scope="col">${h}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td${/^[\d.,]+( ms| s|%)?$/.test(String(c)) ? ' class="num"' : ''}>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>` : `<div class="empty">${empty}</div>`}</div>`;
+const sha = (c) => (c ? `<code>${esc(String(c).slice(0, 8))}</code>` : '');
+const ms = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + ' s' : Math.round(n) + ' ms');
+const checkMs = (l) => (l.checks || []).reduce((n, c) => n + (c.ms || 0), 0);
+const STAGES = ['Recorded', 'Checks', 'Second opinion', 'People', 'Signed'];
+function stages(l) {
+  return [
+    l.unwitnessed || (l.taint || []).length ? 'wait' : 'ok',
+    !(l.checks || []).length ? '' : l.checks.some((c) => c.code !== 0) ? 'bad' : 'ok',
+    !l.manager ? '' : l.manager === 'pass' ? 'ok' : l.manager === 'block' ? 'bad' : 'wait',
+    l.status === 'needs-human' ? 'wait' : (l.approvals || []).length ? 'ok' : '',
+    l.status === 'landed' ? 'ok' : l.status === 'blocked' ? 'bad' : 'wait',
+  ];
+}
+const strip = (l) => `<span class="strip" role="img" aria-label="${stages(l).map((st, i) => `${STAGES[i]}: ${st === 'ok' ? 'passed' : st === 'bad' ? 'refused' : st === 'wait' ? 'waiting or flagged' : 'not needed'}`).join(', ')}">${stages(l).map((st, i) => `<i class="${st}" title="${STAGES[i]}"></i>`).join('')}</span>`;
+const status = (l) => `<span class="dot ${l.status === 'landed' ? 'ok' : l.status === 'blocked' ? 'bad' : 'wait'}"></span>${WORD[l.status] || esc(l.status)}`;
+const who = (l) => esc(l.by || (l.authors || []).map((a) => a.user).filter(Boolean).join(', ') || '');
+const models = (l) => [...new Set((l.authors || []).map((a) => a.model || 'unknown model'))].map((m) => `<span class="pill">${esc(m)}</span>`).join('');
+
+const VIEW = {
+  security() {
+    const tainted = S.sessions.filter((s) => s.taint.length && s.active), signed = S.landings.filter((l) => l.status === 'landed').length;
+    const approveBtn = (id) => `<button data-approve="${esc(id)}">Approve</button>`;
+    return `<h1>Security</h1><p class="lede">Who is acting, what they may touch, and what is waiting for a person. Rules are read from ${esc(S.main)} and enforced at the gate, not in a prompt.</p>
+      <div class="cards">
+        ${card('Identity', WHO && WHO.users ? 'People required' : 'Open', WHO && WHO.users ? 'Every landing, approval and promotion needs a personal token.' : 'No users yet. Add the first with <code>canopy user add &lt;name&gt; --admin</code>.')}
+        ${card('Waiting for a person', PENDING.length, PENDING.length ? 'Listed below.' : 'Nothing is held.')}
+        ${card('Sessions that read outside content', tainted.length, 'Web pages, MCP servers and network commands are remembered per worktree.')}
+        ${card('Signed landings', signed, STATS ? `Key <code>${esc(STATS.key_id)}</code>` : '')}
+        ${card('Notifications', CH && CH.channels.length && CH.routes.length ? CH.channels.map((c) => esc(c.name)).join(', ') : 'Off', CH && CH.channels.length && CH.routes.length ? `${CH.sent} sent${CH.failed ? `, ${CH.failed} failed` : ''}. Approvals and alerts go to ${esc([...new Set(CH.channels.map((c) => c.kind))].join(' and '))}.` : 'Send approvals and alerts to Slack or Discord: <code>canopy notify add &lt;name&gt; &lt;webhook&gt;</code>, then route them under <code>notify</code> in the rules.')}
+      </div>
+      <h2>Waiting for a person</h2>
+      ${table(['Change', 'Asked for by', 'Why it is held', 'Waiting on', ''], PENDING.map((p) => [`<b>${esc(p.branch)}</b><div class="sub">${esc(p.intent || '')}</div>`, esc(p.by || ''), (p.reasons || []).slice(0, 3).map((r) => `<div class="sub">${esc(r)}</div>`).join(''),
+        (p.waiting_on || []).map((q) => `<span class="pill warn">${q.token ? 'anyone holding the approval token' : esc(q.kind === 'person' ? 'a person' : q.section || 'the whole repository') + ': ' + esc(q.owners.join(', ') || 'no one eligible')}</span>`).join('') || '<span class="pill warn">a person</span>', approveBtn(p.id)]), 'Nothing is waiting. Changes that touch protected or owned code, or that took in outside content, stop here until someone approves the exact commit.')}
+      <h2>Who is working, and with what</h2>
+      ${table(['Branch', 'Person', 'Harness', 'Model', 'Outside content'], S.sessions.filter((s) => s.active).map((s) => [`<span class="sw" style="background:${colour(s.branch)}"></span>${esc(s.branch)}`, esc(s.user || 'not signed in'), esc(s.agent || ''), s.model ? `<code>${esc(s.model)}</code>` : '<span class="pill warn">unknown</span>', s.taint.map((t) => `<span class="pill warn">${esc(t)}</span>`).join('') || 'none']), 'No sessions are active.')}
+      <h2>Policy on ${esc(S.main)}</h2>
+      ${table(['Section', 'What applies'], S.rules.map((r) => [`<code>${esc(r.path || '(whole repository)')}</code>`, esc(r.text || 'no extra rules')]), 'No rules file yet. <code>canopy init</code> writes a starter.')}
+      <h2>Audit log</h2>
+      ${AUDIT ? table(['When', 'Person', 'From', 'Action', 'Target'], AUDIT.map((a) => [`${ago(a.ts)} ago`, esc(a.user || ''), `<code>${esc(a.ip || '')}</code>`, `<code>${esc(a.action)}</code>`, esc(a.target)]), 'Nothing recorded yet.') : '<div class="box"><div class="empty">The audit log names people and addresses, so only administrators can read it: <code>canopy audit</code>.</div></div>'}`;
+  },
+  performance() {
+    const ran = S.landings.filter((l) => (l.checks || []).length).slice(0, 30).reverse();
+    const max = Math.max(1, ...ran.map(checkMs)), times = ran.map(checkMs).sort((a, b) => a - b), med = times.length ? times[Math.floor(times.length / 2)] : 0;
+    const slow = new Map();
+    for (const l of ran) for (const c of l.checks) { const x = slow.get(c.cmd) || { n: 0, sum: 0, max: 0 }; x.n++; x.sum += c.ms; x.max = Math.max(x.max, c.ms); slow.set(c.cmd, x); }
+    return `<h1>Performance</h1><p class="lede">What Canopy costs each agent on every tool call, and what each landing costs in checks.</p>
+      <div class="cards">
+        ${card('Hook round trip, median', STATS ? STATS.hook_ms_p50.toFixed(2) + '<small>ms</small>' : '', STATS ? `95th percentile ${STATS.hook_ms_p95.toFixed(2)} ms over ${STATS.hooks} hooks` : '')}
+        ${card('Index', STATS ? ms(STATS.index_ms) : '', STATS ? `${STATS.files} files, ${STATS.nodes} symbols and files` : '')}
+        ${card('Checks per landing, median', times.length ? ms(med) : 'none yet', 'Run in a sandbox on the exact merge commit.')}
+        ${card('Check runs', STATS ? STATS.check_runs : '', `${S.landings.length} verdicts given`)}
+      </div>
+      <h2>Check time of the last ${ran.length} landings</h2>
+      <div class="box">${ran.length ? `<div class="bars" role="img" aria-label="Check time per landing, oldest first. Longest ${ms(max)}.">${ran.map((l) => `<i class="${l.status === 'blocked' ? 'bad' : l.status === 'needs-human' ? 'wait' : ''}" style="height:${Math.max(3, Math.round(checkMs(l) / max * 100))}%" title="${esc(l.branch)}: ${ms(checkMs(l))}"></i>`).join('')}</div>` : '<div class="empty">No checks have run yet.</div>'}</div>
+      <h2>Checks</h2>
+      ${table(['Command', 'Runs', 'Average', 'Slowest'], [...slow].sort((a, b) => b[1].sum - a[1].sum).map(([cmd, x]) => [`<code>${esc(cmd)}</code>`, x.n, ms(x.sum / x.n), ms(x.max)]), 'Put your test command under <code>checks</code> in <code>.canopy/rules.json</code>.')}`;
+  },
+  quality() {
+    const L = S.landings, n = (st) => L.filter((l) => l.status === st).length;
+    const cov = L.filter((l) => typeof l.coverage === 'number'), avg = cov.length ? Math.round(cov.reduce((a, l) => a + l.coverage, 0) / cov.length * 100) : null;
+    const opinions = L.filter((l) => l.manager);
+    return `<h1>Quality</h1><p class="lede">Every change passes the same gate. Each bar below is one landing's passage through it: recorded, checked, given a second opinion, approved by people, signed.</p>
+      <div class="cards">
+        ${card('Landed', n('landed'))}${card('Needed a person', n('needs-human'))}${card('Refused', n('blocked'), 'Failed checks, stale assumptions, conflicts, or access.')}
+        ${card('Read before landing, average', avg === null ? 'n/a' : avg + '<small>%</small>', 'Share of the affected code the agent had read.')}
+        ${card('Second opinions', opinions.length, opinions.length ? `${opinions.filter((l) => l.manager !== 'pass').length} raised something` : 'No manager is configured.')}
+      </div>
+      <h2>Recent verdicts</h2>
+      ${table(['Change', 'Verdict', 'Through the gate', 'Read', 'Why'], L.slice(0, 25).map((l) => [`<span class="sw" style="background:${colour(l.branch)}"></span><b>${esc(l.branch)}</b><div class="sub">${esc(l.intent || '')}</div>`, status(l), strip(l),
+        `<span class="meter"><i style="width:${Math.round((l.coverage ?? 1) * 100)}%"></i></span>${Math.round((l.coverage ?? 1) * 100)}%${l.unread ? `<div class="sub">${l.unread} affected, not read</div>` : ''}`, (l.reasons || []).slice(0, 2).map((r) => `<div class="sub">${esc(r)}</div>`).join('')]), 'No verdicts yet. They appear when an agent runs <code>canopy land</code>.')}
+      <div class="stripkey">${STAGES.map((x) => `<span>${x}</span>`).join('<span aria-hidden="true">›</span>')}<span><span class="dot ok"></span>passed</span><span><span class="dot wait"></span>waiting or flagged</span><span><span class="dot bad"></span>refused</span></div>`;
+  },
+  outcome() {
+    const landed = S.landings.filter((l) => l.status === 'landed');
+    const by = new Map();
+    for (const l of S.landings) for (const m of new Set((l.authors || []).map((a) => a.model || 'unknown model'))) { const x = by.get(m) || { landed: 0, person: 0, blocked: 0 }; x[l.status === 'landed' ? 'landed' : l.status === 'blocked' ? 'blocked' : 'person']++; by.set(m, x); }
+    const stops = [{ name: S.main, branch: S.main, at: S.rev, note: 'Moves only through signed landings.' }, ...ENVS.map((e) => ({ ...e, note: (e.approvals ? `Needs ${e.approvals} of ${e.approvers.join(', ')}. ` : '') + (e.promoters ? `Promoted by ${e.promoters.join(', ')}.` : 'Anyone may promote.') }))];
+    return `<h1>Outcome</h1><p class="lede">What has actually reached ${esc(S.main)}, where it has gone from there, and how each model's work fared at the gate.</p>
+      <h2>From ${esc(S.main)} onward</h2>
+      <div class="box"><div class="rail">${stops.map((e, i) => `${i ? `<span class="join ${e.behind ? 'behind' : ''}">${e.at ? (e.behind ? `${e.behind} behind` : 'level') : 'not yet'}</span>` : ''}<div class="stop"><b>${esc(e.name)}</b><div class="sub">${e.at ? sha(e.at) : 'not created yet'}</div><div class="sub" style="-webkit-line-clamp:3">${esc(e.note)}</div>${i ? `<div class="sub"><code>canopy promote ${esc(e.name)}</code></div>` : ''}</div>`).join('')}</div>
+      ${ENVS.length ? '' : `<div class="empty" style="border-top:1px solid var(--line)">No environments are defined. Add <code>environments</code> to the rules to guard staging and production the same way as ${esc(S.main)}.</div>`}</div>
+      <h2>By model</h2>
+      ${table(['Model, as the harness reported it', 'Landed', 'Needed a person', 'Refused'], [...by].sort((a, b) => b[1].landed - a[1].landed).map(([m, x]) => [`<code>${esc(m)}</code>`, x.landed, x.person, x.blocked]), 'No landings with a recorded author yet.')}
+      <h2>What landed</h2>
+      ${table(['When', 'Change', 'By', 'Written with', 'Commit'], landed.slice(0, 25).map((l) => [`${ago(l.ts)} ago`, `<b>${esc(l.branch)}</b><div class="sub">${esc(l.intent || '')}</div>`, (who(l) || '<span class="sub">not signed in</span>') + ((l.approvals || []).length ? `<div class="sub">approved by ${esc(l.approvals.map((a) => a.user).join(', '))}</div>` : ''), models(l), sha(l.commit)]), 'Nothing has landed through Canopy yet.')}`;
+  },
+};
+function renderTabs() {
+  for (const b of $('tabs').children) {
+    const t = b.dataset.tab;
+    if (t === tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    if (t === 'security') b.innerHTML = 'Security' + (PENDING.length ? `<span class="n" aria-label="${PENDING.length} waiting">${PENDING.length}</span>` : '');
+  }
+}
+function renderPage() {
+  const page = $('page');
+  document.body.dataset.view = tab;
+  page.hidden = tab === 'visibility';
+  if (page.hidden || !S) return;
+  const y = page.scrollTop;
+  page.innerHTML = `<div class="in">${VIEW[tab]()}</div>`;
+  page.scrollTop = y;
+  for (const b of page.querySelectorAll('[data-approve]')) b.onclick = () => approve(b.dataset.approve);
+}
+function go(t) {
+  tab = TABS.includes(t) ? t : 'visibility';
+  if (location.hash.slice(1) !== tab) history.replaceState(null, '', '#' + tab);
+  renderTabs(); renderPage();
+  if (tab === 'security') load();
+  if (tab === 'visibility') { resize(); dirty = true; }
+}
+for (const b of $('tabs').children) b.onclick = () => go(b.dataset.tab);
+addEventListener('hashchange', () => go(location.hash.slice(1)));
+go(location.hash.slice(1));
+
 let rev = null, timer = null;
 async function load() {
   try {
     const st = await (await fetch('/api/state' + (rev ? '?rev=' + rev : ''))).json();
     if (st.files) { buildMap(st.files); rev = st.rev; }
     S = st; renderTop(); renderAgents(); renderSide(); dirty = true; $('live').classList.remove('off');
+    const j = (u) => fetch(u).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    [STATS, ENVS, PENDING, WHO, CH] = await Promise.all([j('/api/stats'), j('/api/environments'), j('/api/pending'), j('/api/whoami'), j('/api/channels')]);
+    ENVS ||= []; PENDING ||= [];
+    if (tab === 'security') AUDIT = await j('/api/audit?limit=25');
+    renderTabs(); renderPage();
   } catch { $('live').classList.add('off'); }
 }
 function connect() {
