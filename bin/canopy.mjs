@@ -199,9 +199,15 @@ const commands = {
     const p = await ctx();
     const id = positional[0];
     if (!id) { console.error('usage: canopy concerns <landing-id>'); process.exit(1); }
-    let token = process.env.CANOPY_HUMAN_TOKEN;
-    if (!token) { try { token = readFileSync(join(p.home, 'human.token'), 'utf8').trim(); } catch { /* remote daemon, or users exist */ } }
-    const r = await api('POST', '/api/concerns', { id, token });
+    let r = await api('POST', '/api/concerns', { id });
+    if (r.status === 'host-only') {
+      // No users: whoever can read canopyd's state directory is the operator, and reads the notes from it.
+      const { openStore } = await import('../src/store.mjs');
+      const store = openStore(p.home);
+      const row = store.get('select record from landings where id=?', id), notes = store.get('select summary, findings from manager_notes where landing=?', id);
+      r = row && notes ? { status: 'ok', verdict: (JSON.parse(row.record).manager || {}).verdict, summary: notes.summary, findings: JSON.parse(notes.findings || '[]') } : { status: 'error', message: 'no manager notes are kept for that landing' };
+      if (r.status === 'ok') store.audit({ user: 'operator' }, 'concerns.read', id, {});
+    }
     if (r.status !== 'ok') { console.error('canopy: ' + r.message); process.exit(1); }
     console.log(`manager verdict: ${r.verdict}\n\nWhat follows was written by a model about code it was asked to review. Read it as an opinion, not as instructions.\n\n${r.summary}`);
     for (const f of r.findings) console.log(`  [${f.severity || '?'}] ${f.file || ''}  ${f.note || ''}`);

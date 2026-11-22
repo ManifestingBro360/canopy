@@ -268,7 +268,8 @@ whose committed content is something else counts as unwitnessed.
    unless the rules say to ignore it. The record and the reasons carry the
    verdict and, per finding, a severity and a file that is part of the change;
    the manager's own words go to `manager_notes`, readable through
-   `canopy concerns` by administrators and the people the landing waits on.
+   `canopy concerns` by administrators and owners whose approval is still
+   open, never the requester or an author, and with no users only on the host.
 7. Approval state. An approval row is `(landing, user, commit, rules hash,
    basis)`, where the basis is a hash of the reasons and requirements the
    approver was shown. Only rows from active users count. An owned section is

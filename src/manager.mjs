@@ -47,7 +47,7 @@ export function runManager(cfg, input, wrap) {
     // Model credentials and settings reach the adapter only under these names.
     for (const [k, v] of Object.entries(process.env)) if (/^(CANOPY_MANAGER_|ANTHROPIC_|OPENAI_|CLAUDE_|CODEX_)/.test(k)) env[k] = v;
     // In a sandbox that cannot read canopyd's key, tokens or database (see sandbox() in gate.mjs).
-    const sb = wrap ? wrap(cfg.cmd) : { file: '/bin/sh', args: ['-c', cfg.cmd] };
+    const sb = wrap ? wrap(cfg.cmd, cwd) : { file: '/bin/sh', args: ['-c', cfg.cmd] };
     try { child = spawn(sb.file, sb.args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true }); } catch (err) { tidy(); return fail('could not start the manager: ' + err.message); }
     let out = '', err = '';
     child.stdout.on('data', (d) => { out = (out + d).slice(-400_000); });

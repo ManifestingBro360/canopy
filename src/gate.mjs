@@ -35,14 +35,20 @@ export function sandbox(cmd, { home, common, network, dir, tmp, port, manager })
     const H = real(homedir()), K = real(home), G = real(common);
     const q = (p) => JSON.stringify(p);
     const sub = (...ps) => ps.map((p) => `(subpath ${q(p)})`).join(' ');
+    // More places credentials live than the check profile lists; the manager gets the longer list.
+    const secrets = [H + '/.ssh', H + '/.aws', H + '/.gnupg', H + '/.config/gh', H + '/.config/gcloud', H + '/.azure', H + '/.kube', H + '/.docker', H + '/.password-store', H + '/.terraform.d', H + '/Library/Cookies'];
+    const secretFiles = [H + '/.netrc', H + '/.npmrc', H + '/.git-credentials', H + '/.config/git/credentials', H + '/.pypirc'];
     if (manager) {
-      // The manager has to reach a model and use its own sign-in, so the network
-      // and its tool's files stay open. What it must never reach: canopyd's key,
-      // tokens and database, the repository's Git directory, other credentials,
-      // and canopyd itself.
+      // The manager has to reach a model and use its own tool's sign-in, so the
+      // network stays open and it may write where that tool keeps its state.
+      // Everything else is read-only, and it can neither read nor write
+      // canopyd's key, tokens and database, the repository's Git directory, or
+      // other credentials, nor talk to canopyd.
       const profile = ['(version 1)', '(allow default)',
+        '(deny file-write* (subpath "/"))',
+        `(allow file-write* ${sub(real(dir), real(tmpdir()), '/private/tmp', '/dev', H + '/.codex', H + '/.claude', H + '/.cache', H + '/Library/Caches', H + '/Library/Logs')} (regex ${q('^' + H.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/\\.claude\\.json')}))`,
         `(deny file-read* file-write* ${sub(K, G)})`,
-        `(deny file-read* ${sub(H + '/.ssh', H + '/.aws', H + '/.gnupg', H + '/.config/gh')} (literal ${q(H + '/.netrc')}) (literal ${q(H + '/.npmrc')}))`,
+        `(deny file-read* ${sub(...secrets)} ${secretFiles.map((f) => `(literal ${q(f)})`).join(' ')})`,
         ...(port ? [`(deny network-outbound (remote ip "localhost:${port}"))`] : []),
       ].join('\n');
       return { file: '/usr/bin/sandbox-exec', args: ['-p', profile, '/bin/sh', '-c', cmd], mode: 'sandbox-exec' };
@@ -59,7 +65,19 @@ export function sandbox(cmd, { home, common, network, dir, tmp, port, manager })
   }
   if (platform() === 'linux' && existsSync('/usr/bin/bwrap')) { // written to the same policy; not yet run on Linux
     const G = real(common);
-    if (manager) return { file: '/usr/bin/bwrap', args: ['--bind', '/', '/', '--dev', '/dev', '--tmpfs', real(home), '--tmpfs', G, '/bin/sh', '-c', cmd], mode: 'bwrap' };
+    if (manager) {
+      // Read-only everywhere; writable only in its own directory and where the
+      // model tools keep their state; canopyd's state, the Git directory and
+      // credential stores are replaced by empty ones. Not yet run on Linux. It
+      // does not stop the manager reaching canopyd on the loopback address:
+      // that would need a network namespace of its own.
+      const H = real(homedir()), there = (p) => existsSync(p);
+      const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--bind', real(dir), real(dir)];
+      for (const p of [H + '/.codex', H + '/.claude', H + '/.cache']) if (there(p)) args.push('--bind', p, p);
+      for (const p of [real(home), G, H + '/.ssh', H + '/.aws', H + '/.gnupg', H + '/.config/gh', H + '/.config/gcloud', H + '/.azure', H + '/.kube', H + '/.docker', H + '/.password-store']) if (there(p)) args.push('--tmpfs', p);
+      for (const f of [H + '/.netrc', H + '/.npmrc', H + '/.git-credentials', H + '/.pypirc']) if (there(f)) args.push('--ro-bind', '/dev/null', f);
+      return { file: '/usr/bin/bwrap', args: [...args, '/bin/sh', '-c', cmd], mode: 'bwrap' };
+    }
     return { file: '/usr/bin/bwrap', args: ['--ro-bind', '/', '/', '--dev', '/dev', '--bind', real(dir), real(dir), '--bind', real(tmp), real(tmp), '--bind', G + '/objects', G + '/objects', '--bind', G + '/worktrees', G + '/worktrees', '--tmpfs', real(home), ...(network ? [] : ['--unshare-net']), '/bin/sh', '-c', cmd], mode: 'bwrap' };
   }
   return { file: '/bin/sh', args: ['-c', cmd], mode: 'none' };
@@ -417,7 +435,7 @@ export class Gate {
     const key = info.C + a.mb + a.rulesHash;
     let r = this.mgrCache.get(key);
     if (!r) {
-      r = await runManager(cfg, dossier(this.e, a, info), (cmd) => sandbox(cmd, { home: this.home, common: this.e.common, port: this.port, manager: true }));
+      r = await runManager(cfg, dossier(this.e, a, info), (cmd, dir) => sandbox(cmd, { home: this.home, common: this.e.common, port: this.port, dir, manager: true }));
       if (r.verdict !== 'error') { if (this.mgrCache.size > 200) this.mgrCache.clear(); this.mgrCache.set(key, r); }
       this.e.store.audit({ user: 'manager' }, 'manager.verdict', info.branch, { verdict: r.verdict, model: r.model, ms: r.ms });
     }
@@ -754,16 +772,21 @@ export class Gate {
   // The manager's written reasons, for the people who decide on a landing and
   // nobody else: administrators and those it is waiting on, or, with no users,
   // whoever holds the approval token.
-  concerns(id, { who, token } = {}) {
+  concerns(id, { who, local } = {}) {
     const s = this.e.store;
     const row = s.get('select worktree, record from landings where id=?', id), notes = s.get('select summary, findings from manager_notes where landing=?', id);
     if (!row || !notes) return { status: 'error', message: 'no manager notes are kept for that landing' };
     const rec = JSON.parse(row.record);
-    const allowed = usersExist(s)
-      ? who && who.user && (who.role === 'admin' || (rec.waiting_on || []).some((q) => q.owners.includes(who.user)) || (rec.owners_required || []).some((q) => q.owners.includes(who.user)))
-      : this.isHuman(token);
-    if (!allowed) { s.audit(who, 'concerns.denied', id, {}); return { status: 'error', message: 'the manager\'s written reasons are shown only to administrators and to the people this landing is waiting on' }; }
-    s.audit(who, 'concerns.read', id, {});
+    if (!local) {
+      // Without users there is nobody the API could tell apart from the requester:
+      // the notes are read on the Canopy host itself.
+      if (!usersExist(s)) return { status: 'host-only', message: 'with no users, the manager\'s written reasons are read on the Canopy host: run `canopy concerns` there' };
+      const u = who && who.user;
+      const open = (rec.waiting_on || []).some((q) => q.owners.includes(u) && !(q.have || []).includes(u));
+      const involved = u === rec.by || (rec.authors || []).some((x) => x.user === u);
+      if (!u || involved || !(who.role === 'admin' || open)) { s.audit(who, 'concerns.denied', id, {}); return { status: 'error', message: 'the manager\'s written reasons are shown only to administrators and to people whose approval this landing is waiting on, never to the person who asked for it or wrote it' }; }
+    }
+    s.audit(local ? { user: 'operator' } : who, 'concerns.read', id, {});
     return { status: 'ok', verdict: rec.manager && rec.manager.verdict, summary: notes.summary, findings: JSON.parse(notes.findings || '[]') };
   }
 

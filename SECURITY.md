@@ -47,14 +47,16 @@ Reporters are credited in `docs/VERIFIER.md` unless they ask not to be.
   than trusted: its verdict cannot loosen anything; it runs in an empty
   directory inside a sandbox that cannot read canopyd's key, tokens or
   database, the repository's Git directory, or SSH, cloud and GitHub
-  credentials, and cannot reach canopyd; and what it writes is kept for
-  administrators and the people a landing is waiting on, never returned to
-  whoever asked for the landing, never signed into Git, never posted to a
-  channel. The Claude Code adapter switches tools off and the OpenAI-compatible
+  credentials, and cannot reach canopyd; it can write only to its own
+  directory and its tool's state; and what it writes is kept for
+  administrators and owners whose approval is still open, never returned to
+  whoever asked for or wrote the change, never signed into Git, never posted
+  to a channel (with no users, it is read on the Canopy host only). The Claude Code adapter switches tools off and the OpenAI-compatible
   adapter is a plain completion. **Codex cannot run without tools.** Inside the
   sandbox it can still read other files canopyd's account can read, including
-  its own sign-in. The sandbox exists on macOS; the Linux profile is untested,
-  and with neither there is none. Do not use the Codex adapter where there is
+  its own sign-in. The sandbox exists on macOS; the Linux profile is untested
+  and does not stop the manager reaching canopyd on the loopback address, and
+  with neither there is none. Do not use the Codex adapter where there is
   no sandbox, or on a repository that takes changes from sources you do not
   trust.
 - **Reported reads are not proof.** They come from the harness. No security

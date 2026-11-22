@@ -194,7 +194,7 @@ When the work is committed, the agent (or you) runs `canopy land`.
 | `canopy status` | Who is changing what, and open notices |
 | `canopy land [--task "..."] [--json]` | Judge this branch and land it. Exit 0 landed, 2 needs a person, 1 blocked |
 | `canopy pending` / `canopy approve <id>` | Landings waiting for a person |
-| `canopy concerns <id>` | What the manager wrote about a held or refused landing. Shown only to administrators and the people it is waiting on |
+| `canopy concerns <id>` | What the manager wrote about a held or refused landing. Shown only to administrators and owners whose approval is still open; with no users, only on the Canopy host |
 | `canopy why <path>[#symbol]` | The landings that made this code what it is |
 | `canopy wait '<path>#<symbol>'` | Block until another agent's change to it lands |
 | `canopy release` | Drop this worktree's holds and in-flight record |
@@ -345,7 +345,11 @@ canopyd's key, tokens or database, the repository's Git directory, or SSH,
 cloud and GitHub credentials (macOS; the Linux profile is untested). What it
 writes never goes back to whoever asked for the landing, into the signed
 record, or to a chat channel: they see the verdict and which files it was
-about, and the people who decide read the rest with `canopy concerns <id>`.
+about. The rest is read with `canopy concerns <id>` by administrators and by
+owners whose approval is still open, never by the person who asked for or
+wrote the change; with no users, it is read on the Canopy host only. Inside
+the sandbox the manager can write only to its own directory and its tool's
+state.
 The Claude Code and OpenAI-compatible adapters also give the model no tools.
 Codex cannot be run that way; see SECURITY.md before using its adapter.
 

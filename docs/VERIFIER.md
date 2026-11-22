@@ -135,7 +135,12 @@ directory, or common credential stores (a test has a stand-in manager try to
 read the signing key and write into canopyd's state; both fail). And the
 manager's words no longer travel: the requester, the signed record and chat
 channels get the verdict and the files concerned, and the text is read with
-`canopy concerns` by administrators and the people the landing waits on. What
+`canopy concerns` by administrators and the people the landing waits on. A third pass tightened both: the notes
+are refused to the requester and to anyone whose session wrote the change,
+and are not served over the API at all when there are no users; the manager's
+sandbox denies writes outside its own directory and its tool's state, and
+covers more credential stores; the untested Linux profile was made read-only.
+What
 remains is stated in `SECURITY.md`: inside the sandbox Codex can still read
 other files of canopyd's account, and the sandbox is macOS-only so far.
 

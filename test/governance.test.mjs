@@ -291,10 +291,11 @@ else if (/SLOW/.test(d.intent)) await new Promise((r) => setTimeout(r, 8000)); e
     // Its words stay with the people who decide; they are not handed back to whoever asked.
     assert.ok(!JSON.stringify(block).includes('look here') && !JSON.stringify(block).includes('because BLOCK'));
     assert.equal(block.record.manager.summary, undefined);
-    const notes = async (token) => (await httpJson(port, 'POST', '/api/concerns', { id: block.id, token })).json;
-    assert.equal((await notes('nope')).status, 'error');
-    const seenBy = await notes(d.humanToken());
-    assert.equal(seenBy.summary, 'block because BLOCK it'); assert.equal(seenBy.findings[0].note, 'look here');
+    // With no users the API hands the notes to nobody, whatever token is sent; the operator reads them on the host.
+    const viaApi = (await httpJson(port, 'POST', '/api/concerns', { id: block.id, token: d.humanToken() })).json;
+    assert.equal(viaApi.status, 'host-only'); assert.ok(!JSON.stringify(viaApi).includes('look here'));
+    const onHost = cli(repo, port, ['concerns', block.id]);
+    assert.match(onHost.out, /block because BLOCK it/); assert.match(onHost.out, /look here/);
     assert.ok(!gitOk(repo, 'notes', '--ref=canopy', 'show', pass.commit).includes('pass because'), 'nor into the signed record');
     if (process.platform === 'darwin') {
       assert.equal(fs.readFileSync(seen + '.key', 'utf8'), 'denied', 'the manager cannot read the signing key');
@@ -322,6 +323,21 @@ test('manager: a pass cannot turn a refusal into a landing, and by default it on
     const prot = await b.land();
     assert.equal(prot.status, 'needs-human', 'the manager said pass; the protected file still needs a person');
     assert.equal(prot.record.manager.verdict, 'pass'); assert.ok(fs.existsSync(ran));
+  });
+});
+
+test('manager: its written reasons go to an administrator or a waiting approver, never to the person who asked or wrote the change', async () => {
+  const dir = tmp('cnp-mgr-'), stub = path.join(dir, 'c.mjs');
+  fs.writeFileSync(stub, `console.log(JSON.stringify({ verdict: 'concern', summary: 'SECRET-LOOKING-TEXT', findings: [] }));`);
+  const doc = rules({ manager: { cmd: `node ${stub}`, when: 'always' } }, [{ path: '' }, { path: 'pay/', owners: ['ben'] }]);
+  await world(7924, doc, { users: ['asha:admin', 'ben', 'carol', 'dave'] }, async ({ port, agent, as }) => {
+    const c = agent('carol'); await c.start(); await c.write('pay/charge.js', BODY2); c.commit();
+    const l = await c.land();
+    assert.equal(l.status, 'needs-human'); assert.ok(!JSON.stringify(l).includes('SECRET-LOOKING-TEXT'));
+    const ask = async (user) => (await httpJson(port, 'POST', '/api/concerns', { id: l.id }, { headers: as(user) })).json;
+    for (const user of ['carol', 'dave', null]) { const r = await ask(user); assert.equal(r.status, 'error', String(user)); assert.ok(!JSON.stringify(r).includes('SECRET')); }
+    assert.equal((await ask('asha')).summary, 'SECRET-LOOKING-TEXT');
+    assert.equal((await ask('ben')).summary, 'SECRET-LOOKING-TEXT', 'an owner whose approval is still open may read them');
   });
 });
 
