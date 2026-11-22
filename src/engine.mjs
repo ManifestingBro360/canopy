@@ -12,6 +12,7 @@ import { loadRules, describe, resolve, modelMatch } from './rules.mjs';
 
 const STALE_MS = 30 * 60_000;      // a holder idle this long only warns, never blocks
 const DEAD_MS = 24 * 3600_000;     // holds older than this are dropped
+const EDIT_MS = 10 * 60_000;       // an edit let through and never reported back is forgotten after this
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // Shell commands that can bring outside content into the session.
 const NET_RE = /\b(curl|wget|nc|ncat|telnet|ssh|scp|sftp|rsync|ftp|gh|hub|glab|aria2c|npx|bunx|pipx)\b|https?:\/\/|\bgit\s+(clone|submodule)\b|\b(npm|pnpm|yarn|bun|pip3?|uv|poetry|cargo|gem|brew|apt|apt-get|go)\s+(i|install|add|get|update|upgrade|dlx|exec|x)\b|\bdocker\s+(pull|run|build)\b/;
@@ -47,6 +48,7 @@ export class Engine {
     this.dirCache = new Map();
     this.entered = new Set();
     this.scanning = new Set();
+    this.editing = new Map();   // worktree + path -> an edit tool was let through here and has not reported back
     this.waiters = new Set();
     this.refresh();
   }
@@ -228,6 +230,7 @@ export class Engine {
         const r = this.preEdit(c, t, i);
         deny ||= r.deny; if (r.warn) extra.push(r.warn);
       }
+      if (!deny && EDIT_TOOLS.has(tool)) this.beforeEdit(c, input);
     } else if (ev === 'PostToolUse') {
       this.post(c, tool, input, body.tool_response, extra);
     } else if (ev === 'SessionEnd') {
@@ -550,13 +553,39 @@ export class Engine {
 
   // ---- post-tool -------------------------------------------------------
 
+  // An edit tool is about to write a file. Whatever is already different there
+  // and was never reported came from a shell command, so it is recorded as one
+  // now, before the tool's own change is added to it. From here until the tool
+  // reports back the file is the tool's, and the scan leaves it alone.
+  beforeEdit(c, input) {
+    const rel = this.rel(c, input.file_path || input.notebook_path);
+    if (!rel) return;
+    const cur = this.readWt(c.wt, rel);
+    const stamp = cur ? cur.stamp : 'gone';
+    const row = this.store.get('select stamp from wtfiles where worktree=? and path=?', c.wt, rel);
+    let unreported = row ? row.stamp !== stamp : false;
+    if (!row) {
+      const base = this.forkBase(c, rel);
+      unreported = cur ? !base || blobOid(cur.text) !== base.oid : !!base;
+    }
+    if (unreported) this.processWrite(c, rel, 'shell');
+    this.editing.set(c.wt + '\0' + rel, { session: c.session, ts: Date.now() });
+  }
+
+  // True while an edit tool that was let through has not reported back.
+  editPending(wt, rel) {
+    const k = wt + '\0' + rel, m = this.editing.get(k);
+    if (m && Date.now() - m.ts > EDIT_MS) { this.editing.delete(k); return false; }
+    return !!m;
+  }
+
   post(c, tool, input, response, extra) {
     if (tool === 'Read') {
       const rel = this.rel(c, input.file_path);
       if (rel) this.recordRead(c, rel, input.offset, input.limit, extra);
     } else if (EDIT_TOOLS.has(tool)) {
       const rel = this.rel(c, input.file_path || input.notebook_path);
-      if (rel) this.processWrite(c, rel, 'hook');
+      if (rel) { this.editing.delete(c.wt + '\0' + rel); this.processWrite(c, rel, 'hook'); }
     } else if (tool === 'Grep' || tool === 'Glob') {
       let blob = '';
       try { blob = JSON.stringify(response || '').slice(0, 200_000); } catch { /* unserialisable */ }
@@ -590,9 +619,17 @@ export class Engine {
   // After a shell command, find files the command changed (formatters, sed,
   // git apply, codegen) and run them through the same write path as an Edit.
   async scan(c) {
+    // This session has moved on to another tool, so an edit it began earlier and
+    // never reported (refused, or failed) is over.
+    for (const [k, m] of this.editing) if (m.session === c.session && k.startsWith(c.wt + '\0')) this.editing.delete(k);
     if (this.scanning.has(c.wt)) return;
     this.scanning.add(c.wt);
     try {
+      const seen = () => new Map(this.store.all('select path, stamp from wtfiles where worktree=?', c.wt).map((r) => [r.path, r.stamp]));
+      // Git's listing below is taken now and arrives later. A file whose record
+      // changes in between was reported by a hook after the listing, so the
+      // listing says nothing about it.
+      const before = seen();
       // --no-optional-locks: never take the index lock out from under the agent's own git commands.
       const [st, committed] = await Promise.all([
         gitAsync(c.wt, ['--no-optional-locks', 'status', '--porcelain', '-z', '--untracked-files=all']),
@@ -607,18 +644,19 @@ export class Engine {
         if (e[0] === 'R' || e[0] === 'C') { i++; if (parts[i]) paths.add(parts[i]); }
       }
       for (const p of (committed || '').split('\0')) if (p) paths.add(p);
-      const known = new Map(this.store.all('select path, stamp from wtfiles where worktree=?', c.wt).map((r) => [r.path, r.stamp]));
+      const known = seen();
       // If the branch's fork point moved (it merged main), everything is measured again.
       const mb = this.mergeBase(c), moved = this.scanMb.has(c.wt) && this.scanMb.get(c.wt) !== mb;
       this.scanMb.set(c.wt, mb);
       for (const p of paths) {
+        if (this.editPending(c.wt, p)) continue;   // the tool's own report records this file
         const cur = this.readWt(c.wt, p);
         const stamp = cur ? cur.stamp : 'gone';
         if (moved || known.get(p) !== stamp) this.processWrite(c, p, 'shell');
       }
       this.closeMerged(c);
       for (const p of known.keys()) {
-        if (paths.has(p)) continue;
+        if (paths.has(p) || before.get(p) !== known.get(p) || this.editPending(c.wt, p)) continue;
         this.processWrite(c, p, 'shell');
         this.store.run('delete from wtfiles where worktree=? and path=?', c.wt, p);
       }
