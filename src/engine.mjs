@@ -449,7 +449,7 @@ export class Engine {
       const st = cur ? cur.stamp : 'gone';
       // The content as last seen, so the gate can tell if what was committed is something else.
       const oid = cur && cur.text ? blobOid(cur.text) : '';
-      s.run('insert into wtfiles(worktree, path, stamp, oid) values(?,?,?,?) on conflict(worktree, path) do update set stamp=excluded.stamp, oid=excluded.oid', c.wt, rel, st, oid);
+      s.run('insert into wtfiles(worktree, path, stamp, seen_blob) values(?,?,?,?) on conflict(worktree, path) do update set stamp=excluded.stamp, seen_blob=excluded.seen_blob', c.wt, rel, st, oid);
     });
 
     const myBranch = c.branch;

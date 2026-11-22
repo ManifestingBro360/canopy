@@ -199,7 +199,7 @@ export class Gate {
     // A file counts as witnessed only if what was committed is what Canopy last
     // saw there: an edit made afterwards, outside any session, is not covered by
     // the record of the edits before it.
-    const seenOid = new Map(e.store.all("select path, oid from wtfiles where worktree=? and oid != ''", wt).map((r) => [r.path, r.oid]));
+    const seenOid = new Map(e.store.all("select path, seen_blob from wtfiles where worktree=? and seen_blob != ''", wt).map((r) => [r.path, r.seen_blob]));
     const unwitnessed = entries.filter((en) => !witnessed.has(en.path) || (en.st !== 'D' && seenOid.has(en.path) && seenOid.get(en.path) !== tryGit(repo, ['rev-parse', '--verify', '--quiet', `${C}:${en.path}`]))).map((en) => en.path);
     const taint = e.store.all('select source from taint where worktree=?', wt).map((r) => r.source);
     if (unwitnessed.length) taint.push('unwitnessed-writes');

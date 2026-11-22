@@ -17,7 +17,7 @@ const SCHEMA = `
 pragma journal_mode = wal;
 pragma synchronous = normal;
 create table if not exists files(path text primary key, oid text, data text);
-create table if not exists sessions(id text primary key, short text, agent text, model text, worktree text, branch text, task text, started int, seen int, ended int);
+create table if not exists sessions(id text primary key, short text, agent text, model text, worktree text, branch text, task text, started int, seen int, ended int, user text default '', ip text default '');
 create table if not exists reads(worktree text, node text, hash text, strength int, session text, ts int, primary key(worktree, node));
 create table if not exists writes(worktree text, node text, path text, kind text, how text, sig_old text, sig_new text, session text, ts int, primary key(worktree, node));
 create table if not exists refs(worktree text, path text, name text, primary key(worktree, path, name));
@@ -27,7 +27,7 @@ create table if not exists notices(id integer primary key, target text, node tex
 create table if not exists taint(worktree text, source text, ts int, primary key(worktree, source));
 create table if not exists tainted_nodes(node text primary key, landing text);
 create table if not exists spans(worktree text, path text, hash text, spans text, primary key(worktree, path));
-create table if not exists wtfiles(worktree text, path text, stamp text, primary key(worktree, path));
+create table if not exists wtfiles(worktree text, path text, stamp text, seen_blob text default '', primary key(worktree, path));
 create table if not exists landings(id text primary key, worktree text, branch text, commit_sha text, merge_sha text, status text, record text, ts int);
 create table if not exists landed_nodes(landing text, node text, kind text, primary key(landing, node));
 create index if not exists landed_nodes_node on landed_nodes(node);
@@ -44,13 +44,19 @@ create table if not exists known(worktree text, node text, hash text, ts int, pr
 create table if not exists audit(seq integer primary key, ts int, user text, ip text, action text, target text, detail text, hash text);
 `;
 // Columns added after 0.1. A database made by 0.1 gains them on first open.
-const ADDED = [['sessions', 'user', "text default ''"], ['sessions', 'ip', "text default ''"], ['wtfiles', 'oid', "text default ''"]];
+// (Not named `oid`: in SQLite that is another name for a table's row id.)
+const ADDED = [['sessions', 'user', "text default ''"], ['sessions', 'ip', "text default ''"], ['wtfiles', 'seen_blob', "text default ''"]];
 
 export function openStore(home) {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(join(home, 'canopy.db'));
   db.exec(SCHEMA);
-  for (const [t, c, type] of ADDED) { try { db.exec(`alter table ${t} add column ${c} ${type}`); } catch { /* already there */ } }
+  for (const [t, c, type] of ADDED) {
+    const has = () => db.prepare(`pragma table_info(${t})`).all().some((x) => x.name === c);
+    if (!has()) db.exec(`alter table ${t} add column ${c} ${type}`);
+    // A column that is not there would make every write fail quietly later; fail here instead.
+    if (!has()) throw new Error(`canopy: could not add column ${t}.${c} to the database`);
+  }
   const cache = new Map();
   const q = (sql) => { let s = cache.get(sql); if (!s) cache.set(sql, (s = db.prepare(sql))); return s; };
   const store = {

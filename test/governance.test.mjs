@@ -64,7 +64,12 @@ async function world(port, ruleDoc, { users = [], env = {}, files = FILES } = {}
   const release = (a) => httpJson(port, 'POST', '/api/release', { cwd: a.wt }, { headers: a.headers });
   const approve = async (id, user, body = {}) => (await httpJson(port, 'POST', '/api/approve', { id, ...body }, { headers: as(user) })).json;
   const get = async (p, user) => (await httpJson(port, 'GET', p, undefined, { headers: as(user) }));
-  try { return await fn({ repo, d, port, tokens, as, agent, approve, get, release }); } finally { d.kill(); }
+  try {
+    const out = await fn({ repo, d, port, tokens, as, agent, approve, get, release });
+    // A hook that throws is swallowed so the agent is never held up; here it must not go unnoticed.
+    assert.equal((await get('/api/stats')).json.hook_errors, 0, 'a hook failed inside canopyd:\n' + d.log.slice(-600));
+    return out;
+  } finally { d.kill(); }
 }
 const BODY2 = "export function charge(amount, currency) {\n  const cents = Math.round(amount * 100);\n  return cents;\n}\n";
 const SIG2 = "export function charge(amount, currency, mode) {\n  const cents = Math.round(amount * 100);\n  return cents;\n}\n";

@@ -41,6 +41,7 @@ export async function serve({ cwd, port = Number(process.env.CANOPY_PORT) || 771
   const gate = new Gate(engine, key, p.home);
   const token = process.env.CANOPY_TOKEN || null;
   const lat = [];
+  let hookErrors = 0;
 
   const send = (res, code, obj) => {
     const body = JSON.stringify(obj);
@@ -78,7 +79,7 @@ export async function serve({ cwd, port = Number(process.env.CANOPY_PORT) || 771
         if (body && body.tool_name !== 'Grep' && body.tool_name !== 'Glob') delete body.tool_response;
         const a = performance.now();
         let out = {};
-        try { out = engine.handle(body, who); } catch (e) { if (!quiet) console.error('[canopy] hook error:', e.message); }
+        try { out = engine.handle(body, who); } catch (e) { hookErrors++; if (!quiet) console.error('[canopy] hook error:', e.message); }
         lat.push(performance.now() - a); if (lat.length > 5000) lat.shift();
         return send(res, 200, out);
       }
@@ -119,7 +120,7 @@ export async function serve({ cwd, port = Number(process.env.CANOPY_PORT) || 771
         if (url.pathname === '/api/stats') {
           const s = [...lat].sort((x, y) => x - y);
           const pct = (q) => (s.length ? Math.round(s[Math.min(s.length - 1, Math.floor(q * s.length))] * 1000) / 1000 : 0);
-          return send(res, 200, { hooks: s.length, hook_ms_p50: pct(0.5), hook_ms_p95: pct(0.95), hook_ms_max: pct(1), index_ms: indexMs, check_runs: gate.checkRuns, files: engine.graph.files.size, nodes: engine.graph.nodes.size, key_id: key.id });
+          return send(res, 200, { hooks: s.length, hook_ms_p50: pct(0.5), hook_ms_p95: pct(0.95), hook_ms_max: pct(1), index_ms: indexMs, check_runs: gate.checkRuns, hook_errors: hookErrors, files: engine.graph.files.size, nodes: engine.graph.nodes.size, key_id: key.id });
         }
         if (url.pathname === '/api/wait') {
           const w = worktreeOf(url.searchParams.get('cwd') || '');
