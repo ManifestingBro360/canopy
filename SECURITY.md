@@ -48,7 +48,8 @@ Reporters are credited in `docs/VERIFIER.md` unless they ask not to be.
   directory inside a sandbox that cannot read canopyd's key, tokens or
   database, the repository's Git directory, or SSH, cloud and GitHub
   credentials, and cannot reach canopyd; it can write only to its own
-  directory and its tool's state; and what it writes is kept for
+  throwaway directory, not to any tool's real settings, where a planted hook
+  would outlive the sandbox; and what it writes is kept for
   administrators and owners whose approval is still open, never returned to
   whoever asked for or wrote the change, never signed into Git, never posted
   to a channel (with no users, it is read on the Canopy host only). The Claude Code adapter switches tools off and the OpenAI-compatible

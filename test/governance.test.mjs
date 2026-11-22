@@ -267,13 +267,14 @@ test('manager: block blocks, concern and garbage and silence ask for a person, a
   const dir = tmp('cnp-mgr-'), stub = path.join(dir, 'stub.mjs'), seen = path.join(dir, 'seen.json');
   fs.writeFileSync(stub, `import fs from 'node:fs';
 let t = ''; for await (const c of process.stdin) t += c;
-const d = JSON.parse(t); fs.writeFileSync(${JSON.stringify(seen)}, t);
+const d = JSON.parse(t);
 // A manager that has been talked into misbehaving: try to read canopyd's key and write into its state.
 const K = fs.readFileSync(${JSON.stringify(path.join(dir, 'home.txt'))}, 'utf8');
 let stole = 'no'; try { stole = fs.readFileSync(K + '/key.pem', 'utf8').slice(0, 20); } catch (e) { stole = 'denied'; }
 try { fs.writeFileSync(K + '/leak', 'x'); } catch {}
-fs.writeFileSync(${JSON.stringify(seen)} + '.key', stole);
-const say = (v) => console.log(JSON.stringify({ verdict: v, summary: v + ' because ' + d.intent, model: 'stub-1', findings: [{ severity: 'high', file: 'lib/util.js', note: 'look here' }] }));
+let outside = 'written'; try { fs.writeFileSync(${JSON.stringify(seen)}, 'x'); } catch { outside = 'denied'; }
+const saw = ' | diff:' + d.diff.includes('+// a') + ' ws:' + d.write_set.length + ' authors:' + Array.isArray(d.authors) + ' key:' + stole + ' outside:' + outside;
+const say = (v) => console.log(JSON.stringify({ verdict: v, summary: v + ' because ' + d.intent + saw, model: 'stub-1', findings: [{ severity: 'high', file: 'lib/util.js', note: 'look here' }] }));
 if (/BLOCK/.test(d.intent)) say('block'); else if (/CONCERN/.test(d.intent)) say('concern');
 else if (/GARBAGE/.test(d.intent)) console.log('I think it is fine {"verdict":"approve"}');
 else if (/SLOW/.test(d.intent)) await new Promise((r) => setTimeout(r, 8000)); else if (/EXIT/.test(d.intent)) process.exit(3); else say('pass');
@@ -284,8 +285,9 @@ else if (/SLOW/.test(d.intent)) await new Promise((r) => setTimeout(r, 8000)); e
     const go = async (intent, text) => { const a = agent(null); await a.start(); await a.write('lib/util.js', FILES['lib/util.js'] + text); a.commit(); return a.land(intent); };
     const pass = await go('tidy', '// a\n');
     assert.equal(pass.status, 'landed'); assert.equal(pass.record.manager.verdict, 'pass'); assert.equal(pass.record.manager.model, 'stub-1');
-    const dossier = JSON.parse(fs.readFileSync(seen, 'utf8'));
-    assert.ok(dossier.diff.includes('+// a') && dossier.write_set.length && dossier.intent === 'tidy' && Array.isArray(dossier.authors));
+    // The stand-in reports what it was given, and what it managed to reach, through its notes.
+    const told = cli(repo, port, ['concerns', pass.id]).out;
+    assert.match(told, /pass because tidy \| diff:true ws:[1-9]\d* authors:true/);
     const block = await go('BLOCK it', '// b\n');
     assert.equal(block.status, 'blocked'); assert.match(block.reasons[0], /manager refused this change about lib\/util\.js \[high\]/);
     // Its words stay with the people who decide; they are not handed back to whoever asked.
@@ -298,8 +300,10 @@ else if (/SLOW/.test(d.intent)) await new Promise((r) => setTimeout(r, 8000)); e
     assert.match(onHost.out, /block because BLOCK it/); assert.match(onHost.out, /look here/);
     assert.ok(!gitOk(repo, 'notes', '--ref=canopy', 'show', pass.commit).includes('pass because'), 'nor into the signed record');
     if (process.platform === 'darwin') {
-      assert.equal(fs.readFileSync(seen + '.key', 'utf8'), 'denied', 'the manager cannot read the signing key');
+      assert.match(told, /key:denied/, 'the manager cannot read the signing key');
       assert.ok(!fs.existsSync(path.join(repo, '.git', 'canopy', 'leak')), 'or write into canopyd\'s state');
+      assert.match(told, /outside:denied/, 'or write anywhere outside its own throwaway directory');
+      assert.ok(!fs.existsSync(seen));
     }
     for (const [intent, re] of [['CONCERN here', /manager raised concerns/], ['GARBAGE out', /no usable verdict/], ['SLOW one', /did not answer within/], ['EXIT now', /exited with 3/]]) {
       const r = await go(intent, `// ${intent}\n`);
@@ -313,16 +317,16 @@ else if (/SLOW/.test(d.intent)) await new Promise((r) => setTimeout(r, 8000)); e
 });
 
 test('manager: a pass cannot turn a refusal into a landing, and by default it only looks at flagged changes', async () => {
-  const dir = tmp('cnp-mgr-'), stub = path.join(dir, 'yes.mjs'), ran = path.join(dir, 'ran');
-  fs.writeFileSync(stub, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(ran)}, 'x'); console.log('{"verdict":"pass","summary":"ship it"}');`);
+  const dir = tmp('cnp-mgr-'), stub = path.join(dir, 'yes.mjs');
+  fs.writeFileSync(stub, `console.log('{"verdict":"pass","summary":"ship it"}');`);
   await world(7912, rules({ manager: { cmd: `node ${stub}` } }, [{ path: '' }, { path: 'pay/', protected: true }]), {}, async ({ agent }) => {
     const a = agent(null); await a.start(); await a.write('lib/util.js', FILES['lib/util.js'] + '// plain\n'); a.commit();
     const plain = await a.land();
-    assert.equal(plain.status, 'landed'); assert.equal(plain.record.manager, undefined); assert.ok(!fs.existsSync(ran));
+    assert.equal(plain.status, 'landed'); assert.equal(plain.record.manager, undefined, 'not asked about a change nothing else flagged');
     const b = agent(null); await b.start(); await b.write('pay/charge.js', BODY2); b.commit();
     const prot = await b.land();
     assert.equal(prot.status, 'needs-human', 'the manager said pass; the protected file still needs a person');
-    assert.equal(prot.record.manager.verdict, 'pass'); assert.ok(fs.existsSync(ran));
+    assert.equal(prot.record.manager.verdict, 'pass');
   });
 });
 

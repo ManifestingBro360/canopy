@@ -348,8 +348,11 @@ record, or to a chat channel: they see the verdict and which files it was
 about. The rest is read with `canopy concerns <id>` by administrators and by
 owners whose approval is still open, never by the person who asked for or
 wrote the change; with no users, it is read on the Canopy host only. Inside
-the sandbox the manager can write only to its own directory and its tool's
-state.
+the sandbox the manager can write only to its own throwaway directory, so the
+Claude Code and Codex adapters run those tools with a fresh settings folder
+there, not yours: give canopyd's environment `ANTHROPIC_API_KEY` (or
+`CLAUDE_CODE_OAUTH_TOKEN`) for Claude Code; Codex's saved sign-in is copied
+in, or set `OPENAI_API_KEY`.
 The Claude Code and OpenAI-compatible adapters also give the model no tools.
 Codex cannot be run that way; see SECURITY.md before using its adapter.
 

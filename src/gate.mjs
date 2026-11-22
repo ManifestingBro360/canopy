@@ -30,25 +30,26 @@ const real = (p) => { try { return realpathSync(p); } catch { return p; } };
 // checkout, its own temp directory, Git's object store and package caches;
 // cannot move refs or install hooks; cannot talk to canopyd; and has no
 // outside network.
+// Where credentials commonly live. One list, so the macOS and Linux profiles cannot drift apart.
+const secretDirs = (H) => ['/.ssh', '/.aws', '/.gnupg', '/.config/gh', '/.config/gcloud', '/.azure', '/.kube', '/.docker', '/.password-store', '/.terraform.d', '/Library/Cookies'].map((p) => H + p);
+const secretFiles = (H) => ['/.netrc', '/.npmrc', '/.git-credentials', '/.config/git/credentials', '/.pypirc'].map((p) => H + p);
+
 export function sandbox(cmd, { home, common, network, dir, tmp, port, manager }) {
   if (platform() === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
     const H = real(homedir()), K = real(home), G = real(common);
     const q = (p) => JSON.stringify(p);
     const sub = (...ps) => ps.map((p) => `(subpath ${q(p)})`).join(' ');
-    // More places credentials live than the check profile lists; the manager gets the longer list.
-    const secrets = [H + '/.ssh', H + '/.aws', H + '/.gnupg', H + '/.config/gh', H + '/.config/gcloud', H + '/.azure', H + '/.kube', H + '/.docker', H + '/.password-store', H + '/.terraform.d', H + '/Library/Cookies'];
-    const secretFiles = [H + '/.netrc', H + '/.npmrc', H + '/.git-credentials', H + '/.config/git/credentials', H + '/.pypirc'];
     if (manager) {
-      // The manager has to reach a model and use its own tool's sign-in, so the
-      // network stays open and it may write where that tool keeps its state.
-      // Everything else is read-only, and it can neither read nor write
-      // canopyd's key, tokens and database, the repository's Git directory, or
-      // other credentials, nor talk to canopyd.
+      // The manager has to reach a model, so the network stays open. It can
+      // write only inside its own throwaway directory: not to any tool's real
+      // settings, where a planted hook or command would outlive the sandbox.
+      // It can neither read nor write canopyd's key, tokens and database, the
+      // repository's Git directory, or other credentials, nor talk to canopyd.
       const profile = ['(version 1)', '(allow default)',
         '(deny file-write* (subpath "/"))',
-        `(allow file-write* ${sub(real(dir), real(tmpdir()), '/private/tmp', '/dev', H + '/.codex', H + '/.claude', H + '/.cache', H + '/Library/Caches', H + '/Library/Logs')} (regex ${q('^' + H.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/\\.claude\\.json')}))`,
+        `(allow file-write* ${sub(real(dir), '/dev')})`,
         `(deny file-read* file-write* ${sub(K, G)})`,
-        `(deny file-read* ${sub(...secrets)} ${secretFiles.map((f) => `(literal ${q(f)})`).join(' ')})`,
+        `(deny file-read* ${sub(...secretDirs(H))} ${secretFiles(H).map((f) => `(literal ${q(f)})`).join(' ')})`,
         ...(port ? [`(deny network-outbound (remote ip "localhost:${port}"))`] : []),
       ].join('\n');
       return { file: '/usr/bin/sandbox-exec', args: ['-p', profile, '/bin/sh', '-c', cmd], mode: 'sandbox-exec' };
@@ -66,16 +67,14 @@ export function sandbox(cmd, { home, common, network, dir, tmp, port, manager })
   if (platform() === 'linux' && existsSync('/usr/bin/bwrap')) { // written to the same policy; not yet run on Linux
     const G = real(common);
     if (manager) {
-      // Read-only everywhere; writable only in its own directory and where the
-      // model tools keep their state; canopyd's state, the Git directory and
-      // credential stores are replaced by empty ones. Not yet run on Linux. It
-      // does not stop the manager reaching canopyd on the loopback address:
-      // that would need a network namespace of its own.
-      const H = real(homedir()), there = (p) => existsSync(p);
+      // Read-only everywhere and writable only in its own throwaway directory;
+      // canopyd's state, the Git directory and credential stores are replaced by
+      // empty ones. Not yet run on Linux. It does not stop the manager reaching
+      // canopyd on the loopback address: that would need its own network namespace.
+      const H = real(homedir());
       const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--bind', real(dir), real(dir)];
-      for (const p of [H + '/.codex', H + '/.claude', H + '/.cache']) if (there(p)) args.push('--bind', p, p);
-      for (const p of [real(home), G, H + '/.ssh', H + '/.aws', H + '/.gnupg', H + '/.config/gh', H + '/.config/gcloud', H + '/.azure', H + '/.kube', H + '/.docker', H + '/.password-store']) if (there(p)) args.push('--tmpfs', p);
-      for (const f of [H + '/.netrc', H + '/.npmrc', H + '/.git-credentials', H + '/.pypirc']) if (there(f)) args.push('--ro-bind', '/dev/null', f);
+      for (const p of [real(home), G, ...secretDirs(H)]) if (existsSync(p)) args.push('--tmpfs', p);
+      for (const f of secretFiles(H)) if (existsSync(f)) args.push('--ro-bind', '/dev/null', f);
       return { file: '/usr/bin/bwrap', args: [...args, '/bin/sh', '-c', cmd], mode: 'bwrap' };
     }
     return { file: '/usr/bin/bwrap', args: ['--ro-bind', '/', '/', '--dev', '/dev', '--bind', real(dir), real(dir), '--bind', real(tmp), real(tmp), '--bind', G + '/objects', G + '/objects', '--bind', G + '/worktrees', G + '/worktrees', '--tmpfs', real(home), ...(network ? [] : ['--unshare-net']), '/bin/sh', '-c', cmd], mode: 'bwrap' };

@@ -12,7 +12,7 @@
 // the model without tools.
 import { spawn } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tryGit } from './git.mjs';
 
@@ -39,11 +39,14 @@ export function runManager(cfg, input, wrap) {
     const t0 = performance.now();
     // `safe` is Canopy's own account of what went wrong; `detail` may contain the manager's output and stays in the notes.
     const fail = (safe, detail = '') => resolve({ verdict: 'error', safe, summary: safe + (detail ? ': ' + detail : ''), findings: [], ms: Math.round(performance.now() - t0) });
+    const env = { PATH: process.env.PATH, HOME: homedir(), LANG: process.env.LANG || 'C.UTF-8' };
+    const setEnv = (dir) => { env.TMPDIR = join(dir, 'tmp'); mkdirSync(env.TMPDIR, { recursive: true }); };
     let child, cwd;
     // Never in the repository: the adapter and the model get the dossier, not a checkout.
     try { cwd = mkdtempSync(join(tmpdir(), 'canopy-manager-')); } catch (err) { return fail('could not make a working directory for the manager: ' + err.message); }
+    // Its temp files go inside its own directory too: that is the only place it may write.
+    try { setEnv(cwd); } catch { /* it will fall back to the system temp directory and be refused there */ }
     const tidy = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* left for the system to clear */ } };
-    const env = { PATH: process.env.PATH, HOME: homedir(), LANG: process.env.LANG || 'C.UTF-8' };
     // Model credentials and settings reach the adapter only under these names.
     for (const [k, v] of Object.entries(process.env)) if (/^(CANOPY_MANAGER_|ANTHROPIC_|OPENAI_|CLAUDE_|CODEX_)/.test(k)) env[k] = v;
     // In a sandbox that cannot read canopyd's key, tokens or database (see sandbox() in gate.mjs).

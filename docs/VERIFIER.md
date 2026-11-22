@@ -138,8 +138,11 @@ channels get the verdict and the files concerned, and the text is read with
 `canopy concerns` by administrators and the people the landing waits on. A third pass tightened both: the notes
 are refused to the requester and to anyone whose session wrote the change,
 and are not served over the API at all when there are no users; the manager's
-sandbox denies writes outside its own directory and its tool's state, and
-covers more credential stores; the untested Linux profile was made read-only.
+sandbox denies every write outside its own throwaway directory (a fourth
+pass removed write access to the model tools' real settings folders, where a
+planted hook would have outlived the sandbox; the adapters now give each tool
+a fresh settings folder), and covers more credential stores from one list
+shared by both platforms; the untested Linux profile was made read-only.
 What
 remains is stated in `SECURITY.md`: inside the sandbox Codex can still read
 other files of canopyd's account, and the sandbox is macOS-only so far.
