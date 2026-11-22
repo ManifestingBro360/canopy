@@ -163,7 +163,7 @@ test('a "landed" notice closes once the branch has merged main', async () => {
   const R = agent('reader'), A = agent('mover');
   await R.read('src/pay.js'); await A.read('src/pay.js'); await A.read('src/checkout.js'); await A.read('src/big.js');
   const src = readFileSync(join(A.wt, 'src/pay.js'), 'utf8');
-  await A.edit('src/pay.js', src.replace('export function refund(amount) {', 'export function refund(amount, reason) {')); A.commit();
+  await A.edit('src/pay.js', src.replace(/export function refund\(([^)]*)\)/, 'export function refund($1, reason)')); A.commit();
   assert.equal((await A.land()).status, 'landed');
   const open = async () => (await state()).notices.filter((x) => x.open && x.kind === 'landed' && x.target === R.branch).length;
   assert.ok(await open() > 0);
@@ -180,4 +180,34 @@ test('nothing is recorded for paths outside the repository or inside .git', asyn
   const s = await state();
   assert.ok(!s.writes.some((w) => w.branch === A.branch));
   assert.ok(!s.reads.some((r) => r.wt === A.branch));
+});
+
+// Found in a trial with real agents: callers who were warned that a function was
+// being reshaped on another branch chose, reasonably, to keep coding against
+// main. The author of the reshaping was never told new callers existed until
+// their own landing was refused. The author is the one who can act.
+const ctxOf = (r) => (r.hookSpecificOutput && r.hookSpecificOutput.additionalContext) || '';
+
+test('the author of a breaking change is told when another branch writes a new caller', async () => {
+  const A = agent('reshape'), B = agent('caller');
+  await A.edit('src/pay.js', readFileSync(join(A.wt, 'src/pay.js'), 'utf8').replace(/export function refund\(([^)]*)\)/, 'export function refund($1, nw7)'));
+  await B.edit('src/jobs.js', "import { refund } from './pay.js';\nexport function nightly(n) {\n  return refund(n);\n}\n");
+  // Other tests in this file leave notices for the same function; read until ours has come through.
+  let told = '';
+  for (let i = 0; i < 6 && !/src\/jobs\.js/.test(told); i++) told += ctxOf(await A.read('src/pay.js'));
+  assert.match(told, /is writing new code in .src\/jobs\.js. that uses .src\/pay\.js#refund./);
+  assert.match(told, /requires a new argument with no default \(.nw7.\)/);
+  assert.match(told, /keep the old form working/);
+});
+
+test('the author of a breaking change is told when a new caller lands on main', async () => {
+  const A = agent('reshape2'), B = agent('caller2');
+  await A.edit('src/pay.js', readFileSync(join(A.wt, 'src/pay.js'), 'utf8').replace(/export function refund\(([^)]*)\)/, 'export function refund($1, why)'));
+  await B.edit('src/jobs2.js', "import { refund } from './pay.js';\nexport function weekly(n) {\n  return refund(n);\n}\n");
+  await A.read('src/pay.js'); // takes the in-flight notice, so the next one is about the landing
+  B.commit(); assert.equal((await B.land()).status, 'landed');
+  const told = ctxOf(await A.read('src/checkout.js'));
+  assert.match(told, /uses .src\/pay\.js#refund. just landed on main/);
+  assert.match(told, /src\/jobs2\.js/);
+  assert.match(told, /git merge main/);
 });
