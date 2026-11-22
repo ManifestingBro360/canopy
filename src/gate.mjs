@@ -635,6 +635,18 @@ export class Gate {
           `${w.node} ${w.kind === 'removed' ? 'was removed' : w.kind === 'signature' ? 'changed its signature' : 'changed'} on ${e.main} (landing ${R.slice(0, 8)}, branch ${fence(branch, 60)}${record.by ? ', by ' + fence(record.by, 40) : ''}).${said} Run \`git merge ${e.main}\` before you build on it.`);
       }
     }
+    // New or changed code that just landed may call something another branch is
+    // reshaping. That branch's author is the one who has to act, so tell them
+    // now, by name and file, not when their own landing is refused.
+    const users = new Map();
+    for (const w of a.writeSet) if (w.kind !== 'removed' && w.kind !== 'format') users.set(pathOf(w.node), 1);
+    for (const m of s.all("select worktree, node, kind from writes where worktree != ? and kind in ('signature','removed') and node like '%#%'", wt)) {
+      if (!a.idents.has(bare(nameOf(m.node))) || a.writeSet.some((w) => w.node === m.node)) continue;
+      e.notify(m.worktree, m.node, e.main + '\u001fuse:' + id, 'high', 'new-use',
+        `Code that uses ${m.node} just landed on ${e.main} (landing ${R.slice(0, 8)}, branch ${fence(branch, 60)}; files: ${[...users.keys()].slice(0, 5).join(', ')}). ` +
+        `It is written for the form of ${nameOf(m.node)} that is on ${e.main}, and you are ${m.kind === 'removed' ? 'removing it' : 'changing its signature'}. ` +
+        `Run \`git merge ${e.main}\` and update those uses before you land, or your landing will be refused when the checks run.`);
+    }
     e.clearWorktree(wt, true); // the session that took in outside content is still running: its taint stays
     e.refresh();
   }

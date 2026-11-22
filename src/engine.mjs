@@ -525,6 +525,14 @@ export class Engine {
       for (const m of moving) {
         if (!mine.has(bare(nameOf(m.node))) || next.has(m.node)) continue;
         this.notify(c.wt, m.node, m.worktree, 'high', m.kind, this.changeText(m.node, m.kind, m.sig_old, m.sig_new, this.wtBranch(m.worktree), 'reference it in code you just wrote'));
+        // And tell the author of the breaking change. Whoever writes against main is
+        // entitled to; the one changing a function's shape is the one who can act:
+        // keep the old form working, or expect to update this caller.
+        const delta = m.kind === 'removed' ? '' : paramDelta(m.sig_old, m.sig_new);
+        this.notify(m.worktree, m.node, c.wt + '\u001fuse:' + rel, 'high', 'new-use',
+          `Branch ${fence(myBranch, 60)} is writing new code in ${rel} that uses ${m.node}, which you are ${m.kind === 'removed' ? 'removing' : 'changing'} in an unlanded change.` +
+          `${delta ? ' ' + delta : ''} That code is written against ${this.main}, where the old form still stands. If it lands before you, your landing will be refused until you update it. ` +
+          `Decide now: keep the old form working (for example, give a new argument a default), or plan to run \`git merge ${this.main}\` and update ${rel} before you land.`);
       }
     }
     if (changed.length || reverted.length) {
