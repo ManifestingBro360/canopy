@@ -130,7 +130,7 @@ this repository; see [the test report](docs/TEST-REPORT.md).
 | Index at start | 0.3 s for 1,000 files, 1.6 s for 10,000 |
 | Fixed cost of one landing | about 0.6 s besides your checks |
 | Eight unrelated branches landing at once (1 s check) | 12.2 s default, 5.9 s with `disjoint`; a plain serial queue took 9.2 s |
-| Tests | 138 pass, 1 skipped (an opt-in live lookup) |
+| Tests | 141 pass, 1 skipped (an opt-in live lookup) |
 
 The safe default is slower than a serial merge queue. Only `disjoint` is
 faster.
