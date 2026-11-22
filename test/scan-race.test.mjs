@@ -80,3 +80,20 @@ test('S3 a shell change followed at once by an edit of the same file is still re
   assert.equal(x.status, 'needs-human', x.reasons);
   assert.match(x.reasons, /arrived through a shell command/);
 });
+
+test('S4 a shell command that reports while an edit is waiting is not folded into that edit', async () => {
+  const x = await run('slow', async (A) => {
+    await A.read('src/pay/charge.js');
+    const file = A.abs('src/pay/charge.js');
+    const input = { file_path: file, old_string: 'a + 1', new_string: 'a + 2' };
+    await A.hook('PreToolUse', { tool_name: 'Edit', tool_input: input });   // let through, not yet written
+    // A second session in the same worktree changes the same file through the shell.
+    fs.appendFileSync(file, 'export function extra() {\n  return 1;\n}\n');
+    await A.hook('PostToolUse', { session_id: 'sess-other', tool_name: 'Bash', tool_input: { command: 'sed' }, tool_response: { stdout: '', stderr: '' } });
+    await sleep(WAIT * 2);
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('a + 1', 'a + 2'));
+    await A.hook('PostToolUse', { tool_name: 'Edit', tool_input: input, tool_response: { success: true } });
+  });
+  assert.equal(x.status, 'needs-human', x.reasons);
+  assert.match(x.reasons, /arrived through a shell command/);
+});

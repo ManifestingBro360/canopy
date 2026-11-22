@@ -12,7 +12,6 @@ import { loadRules, describe, resolve, modelMatch } from './rules.mjs';
 
 const STALE_MS = 30 * 60_000;      // a holder idle this long only warns, never blocks
 const DEAD_MS = 24 * 3600_000;     // holds older than this are dropped
-const EDIT_MS = 10 * 60_000;       // an edit let through and never reported back is forgotten after this
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // Shell commands that can bring outside content into the session.
 const NET_RE = /\b(curl|wget|nc|ncat|telnet|ssh|scp|sftp|rsync|ftp|gh|hub|glab|aria2c|npx|bunx|pipx)\b|https?:\/\/|\bgit\s+(clone|submodule)\b|\b(npm|pnpm|yarn|bun|pip3?|uv|poetry|cargo|gem|brew|apt|apt-get|go)\s+(i|install|add|get|update|upgrade|dlx|exec|x)\b|\bdocker\s+(pull|run|build)\b/;
@@ -88,7 +87,7 @@ export class Engine {
     this.dirCache = new Map();
     this.entered = new Set();
     this.scanning = new Set();
-    this.editing = new Map();   // worktree + path -> an edit tool was let through here and has not reported back
+    this.editing = new Set();   // worktree + path -> an edit tool was let through here and has not reported back
     this.waiters = new Set();
     this.refresh();
   }
@@ -610,15 +609,12 @@ export class Engine {
       unreported = cur ? !base || blobOid(cur.text) !== base.oid : !!base;
     }
     if (unreported) this.processWrite(c, rel, 'shell');
-    this.editing.set(c.wt + '\0' + rel, { session: c.session, ts: Date.now() });
+    this.editing.add(c.wt + '\0' + rel);
   }
 
-  // True while an edit tool that was let through has not reported back.
-  editPending(wt, rel) {
-    const k = wt + '\0' + rel, m = this.editing.get(k);
-    if (m && Date.now() - m.ts > EDIT_MS) { this.editing.delete(k); return false; }
-    return !!m;
-  }
+  // True while an edit tool that was let through has not reported back, and no
+  // shell command has reported in that worktree since.
+  editPending(wt, rel) { return this.editing.has(wt + '\0' + rel); }
 
   post(c, tool, input, response, extra) {
     if (tool === 'Read') {
@@ -660,9 +656,12 @@ export class Engine {
   // After a shell command, find files the command changed (formatters, sed,
   // git apply, codegen) and run them through the same write path as an Edit.
   async scan(c) {
-    // This session has moved on to another tool, so an edit it began earlier and
-    // never reported (refused, or failed) is over.
-    for (const [k, m] of this.editing) if (m.session === c.session && k.startsWith(c.wt + '\0')) this.editing.delete(k);
+    // A shell command has just reported in this worktree, from this session or
+    // another. From here on, a file that differs may be that command's work, so no
+    // file is set aside as "being written by an edit tool" any longer. Only a scan
+    // that was already running when the edit was let through leaves that file alone:
+    // whatever its own shell command did was recorded when the edit was let through.
+    for (const k of this.editing) if (k.startsWith(c.wt + '\0')) this.editing.delete(k);
     if (this.scanning.has(c.wt)) return;
     this.scanning.add(c.wt);
     try {
