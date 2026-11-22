@@ -530,9 +530,9 @@ export class Engine {
         // keep the old form working, or expect to update this caller.
         const delta = m.kind === 'removed' ? '' : paramDelta(m.sig_old, m.sig_new);
         this.notify(m.worktree, m.node, c.wt + '\u001fuse:' + rel, 'high', 'new-use',
-          `Branch ${fence(myBranch, 60)} is writing new code in ${rel} that uses ${m.node}, which you are ${m.kind === 'removed' ? 'removing' : 'changing'} in an unlanded change.` +
+          `Branch ${fence(myBranch, 60)} is writing new code in ${fence(rel, 120)} that uses ${fence(m.node, 160)}, which you are ${m.kind === 'removed' ? 'removing' : 'changing'} in an unlanded change.` +
           `${delta ? ' ' + delta : ''} That code is written against ${this.main}, where the old form still stands. If it lands before you, your landing will be refused until you update it. ` +
-          `Decide now: keep the old form working (for example, give a new argument a default), or plan to run \`git merge ${this.main}\` and update ${rel} before you land.`);
+          `Decide now: keep the old form working (for example, give a new argument a default), or plan to run \`git merge ${this.main}\` and update that file before you land.`);
       }
     }
     if (changed.length || reverted.length) {

@@ -195,7 +195,7 @@ test('the author of a breaking change is told when another branch writes a new c
   // Other tests in this file leave notices for the same function; read until ours has come through.
   let told = '';
   for (let i = 0; i < 6 && !/src\/jobs\.js/.test(told); i++) told += ctxOf(await A.read('src/pay.js'));
-  assert.match(told, /is writing new code in src\/jobs\.js that uses src\/pay\.js#refund/);
+  assert.match(told, /is writing new code in .src\/jobs\.js. that uses .src\/pay\.js#refund./);
   assert.match(told, /requires a new argument with no default \(.nw7.\)/);
   assert.match(told, /keep the old form working/);
 });
@@ -207,7 +207,7 @@ test('the author of a breaking change is told when a new caller lands on main', 
   await A.read('src/pay.js'); // takes the in-flight notice, so the next one is about the landing
   B.commit(); assert.equal((await B.land()).status, 'landed');
   const told = ctxOf(await A.read('src/checkout.js'));
-  assert.match(told, /uses src\/pay\.js#refund just landed on main/);
+  assert.match(told, /uses .src\/pay\.js#refund. just landed on main/);
   assert.match(told, /src\/jobs2\.js/);
   assert.match(told, /git merge main/);
 });

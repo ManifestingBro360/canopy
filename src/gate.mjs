@@ -643,8 +643,8 @@ export class Gate {
     for (const m of s.all("select worktree, node, kind from writes where worktree != ? and kind in ('signature','removed') and node like '%#%'", wt)) {
       if (!a.idents.has(bare(nameOf(m.node))) || a.writeSet.some((w) => w.node === m.node)) continue;
       e.notify(m.worktree, m.node, e.main + '\u001fuse:' + id, 'high', 'new-use',
-        `Code that uses ${m.node} just landed on ${e.main} (landing ${R.slice(0, 8)}, branch ${fence(branch, 60)}; files: ${[...users.keys()].slice(0, 5).join(', ')}). ` +
-        `It is written for the form of ${nameOf(m.node)} that is on ${e.main}, and you are ${m.kind === 'removed' ? 'removing it' : 'changing its signature'}. ` +
+        `Code that uses ${fence(m.node, 160)} just landed on ${e.main} (landing ${R.slice(0, 8)}, branch ${fence(branch, 60)}${a.taint.length ? '' : '; files: ' + [...users.keys()].slice(0, 5).map((f) => fence(f, 100)).join(', ')}). ` +
+        `It is written for the form that is on ${e.main}, and you are ${m.kind === 'removed' ? 'removing it' : 'changing its signature'}. ` +
         `Run \`git merge ${e.main}\` and update those uses before you land, or your landing will be refused when the checks run.`);
     }
     e.clearWorktree(wt, true); // the session that took in outside content is still running: its taint stays
