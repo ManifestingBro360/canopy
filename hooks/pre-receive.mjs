@@ -7,6 +7,11 @@
 // record cannot be copied onto a different history. The notes ref that holds
 // the records can only grow.
 //
+// Environment branches named in `git config canopy.envs` (a JSON object of
+// branch to environment name) are guarded the same way: each moves forward
+// only, only to a commit that carries a signed promotion record for that
+// environment and that position, and only to commits the stage before it has.
+//
 // Needs no database and no running canopyd: only Git and the public key in
 // `git config canopy.pubkey` (base64 of the PEM).
 import { execFileSync } from 'node:child_process';
@@ -23,6 +28,10 @@ try { pub = Buffer.from(g('config', '--get', 'canopy.pubkey'), 'base64').toStrin
 let main = 'main';
 try { main = g('config', '--get', 'canopy.main'); } catch { /* default */ }
 const MAIN = 'refs/heads/' + main, NOTES = 'refs/notes/canopy';
+let envs = {}, envText = null;
+try { envText = g('config', '--get', 'canopy.envs'); } catch { /* none configured */ }
+// A setting that is there but unreadable must not mean "guard nothing".
+if (envText !== null) { try { envs = JSON.parse(envText); } catch { envs = null; } if (!envs || typeof envs !== 'object' || Array.isArray(envs)) fail('canopy.envs in this repository is not readable; run `canopy protect` again'); }
 
 const updates = readFileSync(0, 'utf8').split('\n').filter(Boolean).map((l) => { const [old, neu, ref] = l.split(' '); return { old, neu, ref }; });
 const notesUp = updates.find((u) => u.ref === NOTES);
@@ -39,7 +48,37 @@ function noteFor(tip, sha) {
   return null;
 }
 
+// Where a ref will point once this push is accepted.
+const tipAfter = (ref) => { const u = updates.find((x) => x.ref === ref); if (u) return ZERO.test(u.neu) ? null : u.neu; try { return g('rev-parse', '--verify', '--quiet', ref); } catch { return null; } };
+
 for (const u of updates) {
+  const env = u.ref.startsWith('refs/heads/') ? envs[u.ref.slice(11)] : null;
+  if (env) {
+    const branch = u.ref.slice(11);
+    if (ZERO.test(u.neu)) fail(`${branch} is the ${env} environment and cannot be deleted`);
+    if (!ZERO.test(u.old) && !ok('merge-base', '--is-ancestor', u.old, u.neu)) fail(`${branch} is the ${env} environment; it cannot be rewound or force-pushed`);
+    const note = noteFor(tipAfter(NOTES + '-env-' + env), u.neu);
+    if (!note) fail(`${u.neu.slice(0, 10)} has no promotion record for ${env}. ${branch} only moves through \`canopy promote ${env}\`.`);
+    let rec;
+    try { rec = verifyNote(note, pub); } catch (e) { fail(`${u.neu.slice(0, 10)}: ${e.message}`); }
+    if (rec.kind !== 'promotion' || rec.verdict !== 'promote' || rec.env !== env || rec.branch !== branch) fail(`${u.neu.slice(0, 10)}: its record is not a promotion to ${env}`);
+    if (rec.commit !== u.neu) fail(`${u.neu.slice(0, 10)}: its promotion record was signed for a different commit`);
+    if ((rec.previous || null) !== (ZERO.test(u.old) ? null : u.old)) fail(`${u.neu.slice(0, 10)}: its promotion record was signed for a different position of ${branch}`);
+    const from = tipAfter('refs/heads/' + rec.from);
+    // On the stage before, as one of its own states: a commit that only rode in inside a merge was never checked as a tip.
+    const line = from ? g('rev-list', '--first-parent', from).split('\n') : [];
+    if (!line.includes(u.neu)) fail(`${u.neu.slice(0, 10)} was never the tip of ${rec.from}; ${env} only takes states the stage before it has been in`);
+    continue;
+  }
+  if (u.ref.startsWith(NOTES + '-env-')) {
+    if (ZERO.test(u.neu)) fail('promotion records cannot be deleted');
+    if (!ZERO.test(u.old)) {
+      if (!ok('merge-base', '--is-ancestor', u.old, u.neu)) fail('promotion records cannot be rewritten');
+      // A commit promoted again later (after a rollback forward) may replace its own record; none may vanish.
+      for (const c of g('diff-tree', '-r', '--name-status', '--no-renames', u.old, u.neu).split('\n').filter(Boolean)) if (c[0] === 'D') fail('promotion records cannot be removed');
+    }
+    continue;
+  }
   if (u.ref === NOTES) {
     if (ZERO.test(u.neu)) fail('landing records cannot be deleted');
     if (!ZERO.test(u.old)) {

@@ -224,7 +224,97 @@ being worked on and a feed of landings and high notices; clicking a block
 shows its rules, who is changing it and why it is the way it is. Drag to
 turn, scroll to zoom, one button flattens it to 2D.
 
-## 11. Known limits
+## 11. People and policy (0.2)
+
+**Identity.** `users` holds a name, a role and the SHA-256 of a token. A
+request's bearer token is hashed and looked up on every request, so disabling
+a user takes effect at once. With no users, canopyd behaves as 0.1. With
+users, `/hook`, landing, approving, promoting, releasing and check-in refuse a
+request that carries no valid token. A session records the user it acts for,
+the harness, the model (from `SessionStart`, and from `PostModelSwitch` when it
+changes) and the caller's address.
+
+**Sessions belong to people.** With users, a session id is stored under the
+user whose token sent it, so nobody can speak through another person's
+session, and edit-time policy is judged against the token on that request.
+
+**Authorship.** `authors(worktree, path, session, user, model, agent, how)`
+gains a row whenever a session changes a file, with the person and model the
+session had at that moment and whether the change was seen through an edit
+tool or found afterwards in Git. Rows last until the branch lands: a model
+switch, a release, or a later edit by another session does not remove them.
+`wtfiles.oid` keeps the content last seen for each file; at the gate a file
+whose committed content is something else counts as unwitnessed.
+
+**At the gate**, after the 0.1 analysis:
+
+1. `writers`: the lander, and every user whose session wrote in the section,
+   must be allowed. Otherwise blocked.
+2. `models`: every session that wrote in the section must run an allowed
+   model. An unlisted model, an unknown one, a file with no recorded author,
+   or a change that arrived through a shell command (which may have been a
+   merge or a script) adds a reason that needs a person.
+3. Approvals required: one entry per owned section the change touches, plus
+   one per section with `guard_dependents` reached by a signature change or
+   removal (two hops in the graph).
+4. Advisories, if on: dependencies added or moved in the diff are looked up;
+   findings are noted, sent to a person, or block, as the rules say. An
+   unreachable service is recorded and, by default, does not hold the landing.
+5. Checks, as before.
+6. Manager, if configured: runs after the checks pass, at most once per commit
+   and rules version, in an empty directory inside a sandbox that denies
+   canopyd's state directory, the Git directory and common credential stores.
+   `block` blocks, `concern` adds a reason for a person, an error does the same
+   unless the rules say to ignore it. The record and the reasons carry the
+   verdict and, per finding, a severity and a file that is part of the change;
+   the manager's own words go to `manager_notes`, readable through
+   `canopy concerns` by administrators and owners whose approval is still
+   open, never the requester or an author, and with no users only on the host.
+7. Approval state. An approval row is `(landing, user, commit, rules hash,
+   basis)`, where the basis is a hash of the reasons and requirements the
+   approver was shown. Only rows from active users count. An owned section is
+   satisfied when enough of its owners have approved or are the lander.
+   Reasons that need a person are satisfied by an administrator, or by an owner
+   when every changed file lies in an owned section; never by the lander or
+   anyone whose session wrote the change. A repair of broken rules can be
+   approved by administrators only. An approval that could not be acted on is
+   discarded. Until then the record lists who is being waited on.
+
+**Environments.** `canopy promote <env>` checks the caller against
+`promoters`, that the commit is one of the states the `from` branch has been in (its first-parent line, so a commit that only arrived inside a merge does not qualify), that the environment
+branch is behind it, the approvals, and the environment's checks; then signs a
+promotion record (a note in `refs/notes/canopy-env-<env>`), pushes it with the
+branch if a canonical remote is set, and moves the branch. The `pre-receive`
+hook guards branches listed in `git config canopy.envs` the same way it guards
+`main`.
+
+**Notifications.** The rules name channels and the events routed to each;
+canopyd holds each channel's webhook address. The gate and the engine emit
+`approval`, `security`, `blocked`, `landed` and `promotion` events with a
+title and a few lines of text made from structured fields. Untrusted text is
+reduced to printable characters, cut, and stripped of anything that could
+ping a channel. Each event is sent once per half hour at most, delivery is
+asynchronous, and a failure is written to the audit log and nothing else.
+
+**Audit log.** `audit(ts, user, ip, action, target, detail, hash)`,
+hash-chained. Addresses appear here and nowhere else: not in events sent to
+the map, not in Git.
+
+**Catch-up.** `known(worktree, node, hash, ts)` records the version of each
+symbol a worktree last read in full or wrote, and survives a landing. A symbol
+whose hash on `main` differs, and which the worktree is not itself changing,
+is reported with the landings that touched it since (who, intent unless the
+landing was tainted, line range). Landing notices also go to worktrees in
+`known`, so an agent that landed and moved on still hears about later changes
+to code it knows.
+
+**Other harnesses.** `canopy hook` forwards a command hook's JSON to `/hook`.
+Codex's `apply_patch` names its files inside the patch text; those paths are
+checked before the edit, and after any tool the engine does not recognise the
+worktree is scanned as after a shell command. `canopy checkin` does the scan
+and returns notices for a harness with no hooks.
+
+## 12. Known limits
 
 - The extractor is pattern-based.
 - Dependencies that are not code references are invisible.
@@ -234,6 +324,15 @@ turn, scroll to zoom, one button flattens it to 2D.
 - Each landing costs about 0.6 s besides its checks, and the dependency graph
   is re-linked in full when `main` moves (about 1 s at 10,000 files).
 - When two sessions share a worktree, only the first to act receives a notice.
-- Only the Claude Code adapter exists.
+- The Claude Code adapter is the only one exercised by tests against the real
+  hook payload shape. The Codex adapter follows Codex's documentation and has
+  not been run against Codex; manager adapters have not been run against live
+  models.
+- canopyd is local: it reads worktrees by path and listens on loopback. A team
+  whose agents run on other machines cannot use it yet, and recorded addresses
+  are always the local one.
+- Model names are whatever the harness reports.
+- Advisories cover four manifest formats and only known vulnerabilities, not
+  "a newer version exists".
 - Hosted forges cannot run the `pre-receive` hook; there Canopy must be the
   only identity allowed to push to `main`.

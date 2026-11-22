@@ -380,3 +380,32 @@ one-second checks), because each landing carries about 0.6 s of its own
 overhead. `disjoint` is faster than the queue (5.9 s). A landing in a
 10,000-file repository takes about 1.8 s because the dependency graph is
 re-linked in full.
+
+## Addendum: 0.2 (people and policy)
+
+Two test files were added by the builder and the independent reviewer:
+`test/governance.test.mjs` (26 tests, one of them an opt-in live lookup) and
+`test/review.test.mjs` (18 regression tests from the review). They cover every
+row of "How each part is judged" in the 0.2 brief: identity, ownership and
+approvals, access, model policy, the manager step, advisories, environments
+including refusals by the canonical repository, catch-up, harness-neutral
+check-in, Codex's `apply_patch`, notifications, rules validation, and opening
+a 0.1 database.
+
+What the tests do not show:
+
+- **No live model has been called.** The manager step is tested with stand-in
+  commands; the three adapters in `managers/` have not been run against Claude
+  Code, Codex or a model server.
+- **Codex has not been run.** The Codex adapter is tested with the hook
+  payload shape its documentation describes.
+- **Slack and Discord have not been called.** Notifications are tested against
+  a local server that records what it receives.
+- **OSV.dev was called once**, by hand, with one public package
+  (`CANOPY_LIVE=1`); the suite itself uses a local stand-in.
+- **Addresses in the audit log are always the local one**, because canopyd
+  only listens locally.
+
+The four 0.1 test changes described above stand. No 0.1 test was edited for
+0.2. One 0.1 contract changed on purpose: the text of a landing notice now
+also names who landed the change and its stated purpose.
