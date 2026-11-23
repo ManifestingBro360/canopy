@@ -95,8 +95,13 @@ export function testMarks(text, ext = 'js') {
   const lits = new Map(), t = scrub(String(text), ext, false, lits);
   const body = [...lits.keys()], lit = (k) => body[Number(k)] ?? '';
   const titles = new Set([...t.matchAll(TITLE_RE)].map((m) => (m[1] !== undefined ? lit(m[1]) : m[2] ?? m[3])));
-  // Each marker with what follows it (the test's name, with literals put back), so moving a skip from one test to another shows.
-  const skips = new Map(); for (const k of [...t.matchAll(SKIP_RE)].map((m) => t.slice(m.index, m.index + m[0].length + 60).replace(/"S(\d+)"/g, (_, k) => JSON.stringify(lit(k))).replace(/\s+/g, ' ').trim())) skips.set(k, (skips.get(k) || 0) + 1);
+  // Each marker with the name that follows it, counted, so moving a skip from one test to another, or repeating one, shows.
+  const skips = new Map();
+  for (const m of t.matchAll(SKIP_RE)) {
+    const near = /"S(\d+)"/.exec(t.slice(m.index, m.index + m[0].length + 60));
+    const k = m[0].replace(/\s+/g, '').replace(/^[^\w.@#]/, '') + ' ' + (near ? lit(near[1]) : '');
+    skips.set(k, (skips.get(k) || 0) + 1);
+  }
   return { titles, skips };
 }
 // A path a test runner will pick up again; renaming a test file to anything else removes it.
