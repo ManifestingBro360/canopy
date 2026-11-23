@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const [cmd, ...args] = process.argv.slice(2);
+if (cmd === '--version' || cmd === '-v') { console.log(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version); process.exit(0); }
 const cwd = process.cwd();
 const flag = (name) => { const i = args.indexOf('--' + name); return i < 0 ? null : (args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : true); };
 const positional = args.filter((a, i) => !a.startsWith('--') && !(args[i - 1] || '').startsWith('--'));

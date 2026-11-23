@@ -1,0 +1,22 @@
+name: publish
+# Publishes to npm when a GitHub release is published. Uses npm trusted
+# publishing (OpenID Connect): no token is stored, and the package carries a
+# provenance statement linking it to this repository and commit.
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  npm:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest
+      - run: npm test
+      - run: npm publish --provenance --access public

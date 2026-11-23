@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img src="assets/logo.svg" alt="Canopy" width="300">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ManifestingBro360/canopy/main/assets/logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/ManifestingBro360/canopy/main/assets/logo.svg" alt="Canopy" width="300">
   </picture>
 </p>
 
@@ -12,6 +12,8 @@
 
 <p align="center">
   <a href="https://github.com/ManifestingBro360/canopy/actions/workflows/ci.yml"><img src="https://github.com/ManifestingBro360/canopy/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
+  <a href="https://www.npmjs.com/package/canopy-land"><img src="https://img.shields.io/npm/v/canopy-land?color=12805C" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/canopy-land"><img src="https://img.shields.io/npm/dm/canopy-land?color=12805C" alt="npm downloads a month"></a>
   <img src="https://img.shields.io/badge/dependencies-0-12805C" alt="no dependencies">
   <img src="https://img.shields.io/badge/node-%E2%89%A5%2022.13-12805C" alt="Node 22.13 or later">
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache--2.0-12805C" alt="Apache-2.0"></a>
@@ -19,7 +21,7 @@
 
 <p align="center"><a href="https://theprojectsierra.ai/canopy/">Website</a> · <a href="docs/DESIGN.md">Design</a> · <a href="docs/TEST-REPORT.md">Test report</a> · <a href="CONTRIBUTING.md">Contribute</a></p>
 
-![How Canopy works: two agents in separate worktrees; one changes a function the other calls and the second is told at once; each change passes a five-stage gate; only signed changes move main and then staging and production](assets/how-it-works.svg)
+![How Canopy works: two agents in separate worktrees; one changes a function the other calls and the second is told at once; each change passes a five-stage gate; only signed changes move main and then staging and production](https://raw.githubusercontent.com/ManifestingBro360/canopy/main/assets/how-it-works.svg)
 
 ## By design
 
@@ -40,7 +42,7 @@
 Your team works on the product. The record, the gate and the rules are
 Canopy's job.
 
-![The Canopy map: a repository drawn as blocks, with the branches being worked on and a feed of landings](docs/map.jpg)
+![The Canopy map: a repository drawn as blocks, with the branches being worked on and a feed of landings](https://raw.githubusercontent.com/ManifestingBro360/canopy/main/docs/map.jpg)
 
 ## Why
 
@@ -98,9 +100,7 @@ No npm dependencies. One Node process. One SQLite file. You need Node 22.13 or
 later and Git 2.38 or later.
 
 ```bash
-git clone https://github.com/ManifestingBro360/canopy
-cd canopy
-node bin/canopy.mjs demo
+npx canopy-land demo
 ```
 
 Open http://127.0.0.1:7717. The demo generates a small repository and plays
@@ -116,7 +116,7 @@ scripted agents against the real hook endpoint and the real gate.
 | Record of what the agent read | No | No | No | Yes, harness-reported |
 | Per-folder rules an agent cannot loosen | For people | For people | No | Yes, read from `main` only |
 | Works on GitHub.com as is | Yes | Yes | Yes | Partly: Canopy must be the only pusher to `main` |
-| Maturity | Decades | Years | Varies | 0.1 |
+| Maturity | Decades | Years | Varies | 0.2 |
 
 ## Measured, including where it loses
 
@@ -130,14 +130,14 @@ this repository; see [the test report](docs/TEST-REPORT.md).
 | Index at start | 0.3 s for 1,000 files, 1.6 s for 10,000 |
 | Fixed cost of one landing | about 0.6 s besides your checks |
 | Eight unrelated branches landing at once (1 s check) | 12.2 s default, 5.9 s with `disjoint`; a plain serial queue took 9.2 s |
-| Tests | 142 pass, 1 skipped (an opt-in live lookup) |
+| Tests | 148 pass, 1 skipped (an opt-in live lookup) |
 
 The safe default is slower than a serial merge queue. Only `disjoint` is
 faster.
 
 ## Where it stands
 
-Canopy is at 0.1. Not proven yet:
+Canopy is at 0.2. Not proven yet:
 
 - **No independent security test.** The gate and sandbox have defensive tests
   only. See [SECURITY.md](SECURITY.md).
@@ -157,13 +157,14 @@ can [add your logo](ADOPTERS.md).
 
 ## Use it on a repository
 
-Put the `canopy` command on your PATH once, from this folder:
+Install the `canopy` command once (the package is `canopy-land`; the command
+it installs is `canopy`):
 
 ```bash
-npm link
+npm install -g canopy-land
 ```
 
-(Or call it as `node /path/to/canopy/bin/canopy.mjs`.) Then, in the
+(From a clone, `npm link` in the clone's folder does the same.) Then, in the
 repository you want to coordinate:
 
 ```bash
