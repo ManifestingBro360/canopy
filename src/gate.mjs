@@ -103,14 +103,20 @@ export function testMarks(text, ext = 'js') {
   const DEF = /^\s*(?:export\s+)?(?:async\s+)?(?:def|class|fn|pub|func|function|public|private|protected|static|void|it|test|describe)\b/;
   let from = 0, end = -1, key = ''; // the line the last marker was on: one key per line, so the work stays linear in the file
   for (const m of t.matchAll(SKIP_RE)) {
-    if (m.index > end) {
-      from = t.lastIndexOf('\n', m.index) + 1; // scans back over this line once; later markers on it reuse the result
-      end = t.indexOf('\n', m.index); if (end < 0) end = t.length;
+    // Where the marker itself starts: the pattern may have taken the character before it, which can be the line break.
+    const at = m.index + (/^[^\w.@#]/.test(m[0]) ? 1 : 0);
+    if (at > end) {
+      from = t.lastIndexOf('\n', at - 1) + 1; // scans back over this line once; later markers on it reuse the result
+      end = t.indexOf('\n', at); if (end < 0) end = t.length;
       let to = end;
       // A decorator or attribute: read on to the line that declares the test, through continuation lines (20 lines at most).
-      if (/^\s*(?:@|#\[)/.test(t.slice(from, Math.min(end, from + 200)))) {
-        for (let n = 0; n < 20 && to < t.length; n++) { const nx = t.indexOf('\n', to + 1), e2 = nx < 0 ? t.length : nx, line = t.slice(to + 1, Math.min(e2, to + 201)); to = e2; if (DEF.test(line)) break; }
+      let found = true;
+      if (/^\s*(?:@|#\[)/.test(t.slice(from, end).trimStart().slice(0, 2))) {
+        found = false;
+        for (let n = 0; n < 20 && to < t.length && !found; n++) { const nx = t.indexOf('\n', to + 1), e2 = nx < 0 ? t.length : nx; found = DEF.test(t.slice(to + 1, e2).trimStart().slice(0, 40)); to = e2; }
       }
+      // No declaration within reach: a key that matches nothing in the old file, so a person looks.
+      if (!found) { key = 'undeclared:' + from; skips.set(key, (skips.get(key) || 0) + 1); continue; }
       key = t.slice(from, to).replace(/"S(\d+)"/g, (_, n) => JSON.stringify(lit(n))).replace(/\s+/g, ' ').trim();
       if (key.length > 400) key = 'sha256:' + createHash('sha256').update(key).digest('hex'); // the whole text still decides the key
     }
