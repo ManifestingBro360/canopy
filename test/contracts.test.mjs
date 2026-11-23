@@ -343,6 +343,9 @@ test('C-marks: a removed test name or a new skip is seen even when the counts ar
   assert.ok(fresh('@pytest.mark.skip(\n    reason="x"\n)\ndef test_a():\n    pass\ndef test_b():\n    pass\n', 'def test_a():\n    pass\n@pytest.mark.skip(\n    reason="x"\n)\ndef test_b():\n    pass\n', 'py'));
   // A marker at the very start of a line is keyed by its own line, not the one before it.
   assert.ok(fresh("xit('a', () => {});\nit('b', () => {});\n", "it('a', () => {});\nxit('b', () => {});\n"));
+  // A decorator with no declaration in reach is keyed by its text, not its place: a different one at the same place is new.
+  const gap = '\n'.repeat(30);
+  assert.ok(fresh('@pytest.mark.skip(reason="a")' + gap + 'def test_a():\n    pass\n', '@pytest.mark.skip(reason="b")' + gap + 'def test_a():\n    pass\n', 'py'));
   // Stacked decorators: the name of the test is still part of the key. A long line is keyed whole.
   assert.ok(fresh('@pytest.mark.skip\n@slow\ndef test_a():\n    pass\n@slow\ndef test_b():\n    pass\n', '@slow\ndef test_a():\n    pass\n@pytest.mark.skip\n@slow\ndef test_b():\n    pass\n', 'py'));
   const pad = ' '.repeat(500);
