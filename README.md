@@ -158,6 +158,20 @@ Each gap above is an open issue. [CONTRIBUTING.md](CONTRIBUTING.md) says where
 to start and [ROADMAP.md](ROADMAP.md) gives the order. If you use Canopy, you
 can [add your logo](ADOPTERS.md).
 
+## Open problems: help wanted
+
+These are unsolved, and each has a measured result you can try to beat. Ideas,
+counter-arguments and experiments are as welcome as code.
+
+| Problem | Where it stands |
+|---|---|
+| [Agents ignore mid-task warnings](https://github.com/ManifestingBro360/canopy/issues/28) | 1 of 8 warned agents adapted before landing |
+| [A caller can land before the contract exists](https://github.com/ManifestingBro360/canopy/issues/29) | Seen in trial 4 |
+| [Behaviour changes that keep the same signature](https://github.com/ManifestingBro360/canopy/issues/30) | Not caught; not yet properly tested |
+| [Two machines cannot see each other's work](https://github.com/ManifestingBro360/canopy/issues/31) | Not built; design wanted first |
+| [Judging whether a contract tests enough](https://github.com/ManifestingBro360/canopy/issues/32) | Only "is it a real test" is checked |
+| [Contracts for Python, Go and other runners](https://github.com/ManifestingBro360/canopy/issues/33) | Node test files only |
+
 ## Use it on a repository
 
 Install the `canopy` command once (the package is `canopy-land`; the command
