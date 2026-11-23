@@ -74,15 +74,25 @@ export function paramDelta(sigOld, sigNew) {
   if (need(b).length > need(a).length) return 'An argument that had a default is now required: a call that left it out will not work as it is.';
   if (gone.length) return `It no longer takes ${gone.map((x) => fence(x.name, 30)).join(', ')}: a call that passes ${gone.length === 1 ? 'it' : 'them'} needs changing.`;
   if (a.length === b.length && a.some((x, i) => x.name !== b[i].name) && a.every((x) => b.some((y) => y.name === x.name))) return 'Its arguments are in a different order: check every call.';
+  if (b.length > a.length && a.some((x, i) => b[i].name !== x.name)) return 'An argument was inserted before existing ones, so the positions of the existing arguments changed: a call written for the old form will not work as it is.';
   return b.length > a.length ? 'The added arguments are optional: existing calls keep working.' : '';
 }
 
 // True when a change of signature forces existing callers to change. Adding an
 // optional or defaulted argument is not breaking; removing or reshaping one is.
+// A signature that cannot be read as a parameter list is treated as breaking
+// (fail closed). A change in types alone is not seen: out of scope in this step.
 export function isBreaking(kind, sigOld, sigNew) {
   if (kind === 'removed') return true;
+  if (kind === 'signature' && (!params(sigOld) || !params(sigNew))) return true;
   const d = paramDelta(sigOld, sigNew);
   return !!d && !d.startsWith('The added arguments are optional');
+}
+
+// The publish command for a symbol, only when its name is plain enough to paste
+// into a shell; otherwise the name is shown fenced and the command is described.
+export function publishCommand(node, test = '<test-file>') {
+  return /^[\w./@$-]+#[\w$.]+$/.test(node) && !node.includes("'") ? `canopy contract publish '${node}' --test ${test}` : `canopy contract publish with the path#symbol named above (${fence(node, 160)}) and --test ${test}`;
 }
 
 export class Engine {
@@ -597,8 +607,8 @@ export class Engine {
     if (!this.ruleset.contracts.requireForBreaking || !ch.name || (ch.kind !== 'signature' && ch.kind !== 'removed') || !isBreaking(ch.kind, ch.sigOld, ch.sigNew)) return;
     if (!this.isShared(ch.node, c.wt)) return;
     this.notify(c.wt, ch.node, c.wt + '\u001fcontract', 'high', 'contract',
-      `You are making a breaking change to ${ch.node}, which other code uses. Landing will be refused until you either keep old callers working (for example, give a new argument a default) or publish a contract: a test that fails on ${this.main} and passes on your branch. ` +
-      `Run \`canopy contract publish '${ch.node}' --test <test-file>\` once the test is written; callers are then shown it.`);
+      `You are making a breaking change to ${fence(ch.node, 160)}, which other code uses. Landing will be refused until you either keep old callers working (for example, give a new argument a default) or publish a contract: a test that fails on ${this.main} and passes on your branch. ` +
+      `Run \`${publishCommand(ch.node)}\` once the test is written; callers are then shown it.`);
   }
 
   // Tell every other worktree whose record touches this change.

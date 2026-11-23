@@ -330,9 +330,17 @@ depends on it (the graph) or another worktree reads or references it
   symbol must have a breaking write recorded in the worktree. The test path must
   stay inside the worktree (links resolved), look like a test file, end in
   `.js`, `.mjs` or `.cjs` and contain a test case. canopyd copies the file into a
-  scratch checkout of `main` and runs `node --test <file>` in the sandbox. Exit
-  code 1 is accepted; 0 is refused ("passes on main proves nothing"); anything
-  else (crash, timeout) is refused as unrunnable. The accepted contract
+  scratch checkout of `main` and runs `node --test --test-reporter=tap <file>`
+  in the sandbox. The file is opened without following links or blocking and
+  its size is taken from the open file (a pipe or huge file is refused); its
+  resolved name must be plain (`[\w./@-]`), and the id stored is that of the bytes
+  that were run. Before running, every relative import must exist on `main`, the
+  test must import the file that defines the symbol and use its name. Exit 1
+  with a failed test case is accepted; 0 is refused ("passes on main proves
+  nothing"); a failure of the file itself (import, syntax or top-level error) or
+  anything not clearly a test failure is refused. Symbol names and test paths
+  are fenced in every message, and a name too odd to paste into a shell never
+  appears in a command. The accepted contract
   (symbol, new signature, test path, blob id, a 400-character excerpt) goes in
   the `contracts` table and is announced to every affected worktree.
 - **Caller notice.** `changeText` appends the contract to the change notice:
@@ -354,6 +362,14 @@ depends on it (the graph) or another worktree reads or references it
   the record and the landing notification. A file whose layout the counter
   cannot read (no recognised case or assertion) keeps the old rule: any removed
   line holds.
+
+Counting ignores string and template literal contents and comments, constant
+assertions (`assert.ok(true)`, `assert.equal(1, 1)`, `assert.equal(x, x)`) and
+tests marked skip or todo. Renaming a test file to a name a runner will not
+pick up (for example `.disabled`) is a deletion. An optional argument inserted
+before existing ones, and a signature that cannot be read as a parameter list
+on shared code, are breaking; a change in types alone is not seen (out of scope
+in this step).
 
 Limits: Node test files only; the "fails on main" check cannot tell a test that
 fails because it pins the new behaviour from one that fails because it imports

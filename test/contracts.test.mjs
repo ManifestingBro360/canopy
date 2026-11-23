@@ -198,3 +198,114 @@ test('tests reduced: an edit that keeps the counts does not hold, and is recorde
   assert.deepEqual(r.record.tests_modified, ['test/edit.test.js']);
   assert.equal(r.record.test_reductions.length, 0);
 }));
+
+// ---- Review round: stricter contracts, counter, parameters ----------------------
+
+import { testStats } from '../src/gate.mjs';
+import { isBreaking } from '../src/engine.mjs';
+import { spawnSync } from 'node:child_process';
+
+const HEAD = "import test from 'node:test';\nimport assert from 'node:assert';\n";
+async function publishWith(body, { name = 'test/money.contract.test.js', extra = {} } = {}) {
+  let out;
+  await run(async (ctx) => {
+    const A = await authorA(ctx);
+    fs.mkdirSync(A.abs('test'), { recursive: true });
+    for (const [f, t] of Object.entries(extra)) { fs.mkdirSync(path.dirname(A.abs(f)), { recursive: true }); fs.writeFileSync(A.abs(f), t); }
+    fs.writeFileSync(A.abs(name), body);
+    out = publish(A, undefined, name);
+  });
+  return out;
+}
+
+test('1a: a contract test that imports a file that exists only on the branch is refused', async () => {
+  const r = await publishWith(HEAD + "import { toCents } from '../src/money.js';\nimport { helper } from '../src/helper.js';\ntest('x', () => { assert.equal(helper(toCents(1, 'round')), 100); });\n",
+    { extra: { 'src/helper.js': 'export const helper = (x) => x;\n' } });
+  assert.equal(r.code, 2, r.out); assert.match(r.out, /src\/helper\.js/); assert.match(r.out, /not on main/);
+});
+
+test('1b: a failure to load the test (top-level throw, syntax error) is not a contract', async () => {
+  const a = await publishWith(HEAD + "import { toCents } from '../src/money.js';\nthrow new Error('boom at load ' + typeof toCents);\ntest('x', () => {});\n");
+  assert.equal(a.code, 2, a.out); assert.match(a.out, /did not fail by a test/);
+  const b = await publishWith(HEAD + "import { toCents } from '../src/money.js';\ntest('x', () => { toCents( ;\n");
+  assert.equal(b.code, 2, b.out); assert.match(b.out, /did not fail by a test/);
+});
+
+test('1c: the test must import the file that defines the symbol and mention the symbol', async () => {
+  const a = await publishWith(HEAD + "import { total } from '../src/cart.js';\ntest('toCents mentioned', () => { assert.equal(total(), 1); });\n");
+  assert.equal(a.code, 2, a.out); assert.match(a.out, /Import src\/money\.js directly/);
+  const b = await publishWith(HEAD + "import * as m from '../src/money.js';\ntest('x', () => { assert.equal(m.selfTest(), 3); });\n");
+  assert.equal(b.code, 2, b.out); assert.match(b.out, /toCents/); assert.match(b.out, /name/);
+});
+
+test('2: a link to a name with shell characters is refused after the link is resolved', () => run(async (ctx) => {
+  const A = await authorA(ctx);
+  fs.mkdirSync(A.abs('test'), { recursive: true });
+  fs.writeFileSync(A.abs('test/we$ird.test.js'), CONTRACT); fs.symlinkSync('we$ird.test.js', A.abs('test/link.test.js'));
+  const r = publish(A, undefined, 'test/link.test.js');
+  assert.equal(r.code, 2, r.out); assert.match(r.out, /letters, digits/);
+}));
+
+test('3: counter ignores strings, constant assertions, skipped and todo tests', () => {
+  assert.deepEqual(testStats("test('a', () => { const s = \"assert.equal(1, 2); test('b', () => {})\"; assert.equal(f(), 2); });"), { cases: 1, asserts: 1 });
+  assert.deepEqual(testStats("test('a', () => { const s = `assert.ok(x) ${1}`; assert.equal(f(), 2); });"), { cases: 1, asserts: 1 });
+  const k = testStats("test('a', () => { assert.ok(true); assert(true); assert.equal(1, 1); assert.strictEqual('a', 'a'); assert.equal(x, x); assert.equal(f(), 2); });");
+  assert.deepEqual(k, { cases: 1, asserts: 1 });
+  assert.equal(testStats("test('a', { skip: true }, () => { assert.equal(f(), 2); });").cases, 0);
+  assert.equal(testStats("it.skip('a', () => {}); it.todo('b'); test.todo('c'); test('d', { todo: 'later' }, () => {});").cases, 0);
+});
+
+test('3: renaming a test file to a name the runner will not discover holds the landing', () => run(async (ctx) => {
+  const A = new H.Agent(ctx.d, ctx.repo, 'rename'); await A.start(); await A.read('test/edit.test.js');
+  H.gitOk(A.wt, 'mv', 'test/edit.test.js', 'test/edit.js.disabled'); await A.bash('git mv'); A.commit('r');
+  const r = A.land(['--task', 'rename']).json;
+  assert.equal(r.status, 'needs-human'); assert.match(r.reasons.join(' '), /tests were removed or reduced/);
+}));
+
+test('4: isBreaking: an optional argument inserted before existing ones, or a signature that cannot be read, is breaking; types alone are not', () => {
+  assert.equal(isBreaking('signature', 'export function f(a, b)', 'export function f(x = 1, a, b)'), true);
+  assert.equal(isBreaking('signature', 'export function f(a, b)', 'export function f(a, b, c = 1)'), false);
+  assert.equal(isBreaking('signature', 'class A', 'class A extends B'), true);
+  assert.equal(isBreaking('signature', 'function f(a: number)', 'function f(a: string)'), false);
+  assert.equal(isBreaking('removed', '', ''), true);
+});
+
+test('5: a FIFO is refused without stalling canopyd; an oversize file is refused from its size', () => run(async (ctx) => {
+  const A = await authorA(ctx);
+  fs.mkdirSync(A.abs('test'), { recursive: true });
+  assert.equal(spawnSync('mkfifo', [A.abs('test/fifo.test.js')]).status, 0);
+  const r = H.cli(A.wt, PORT, ['contract', 'publish', 'src/money.js#toCents', '--test', 'test/fifo.test.js'], { timeout: 20000 });
+  assert.equal(r.code, 2, 'fifo: ' + r.out + r.err); assert.match(r.out, /regular file/);
+  fs.writeFileSync(A.abs('test/big.test.js'), ''); fs.truncateSync(A.abs('test/big.test.js'), 50_000_000);
+  const b = H.cli(A.wt, PORT, ['contract', 'publish', 'src/money.js#toCents', '--test', 'test/big.test.js'], { timeout: 20000 });
+  assert.equal(b.code, 2); assert.match(b.out, /larger than/);
+  assert.match(H.cli(A.wt, PORT, ['contract', 'list']).out, /No contracts/); // canopyd still answers
+}));
+
+test('6: publishing needs to know who you are once canopyd has users', () => run(async (ctx) => {
+  const A = await authorA(ctx);
+  fs.mkdirSync(A.abs('test'), { recursive: true }); fs.writeFileSync(A.abs('test/money.contract.test.js'), CONTRACT);
+  const u = H.cli(ctx.repo, PORT, ['user', 'add', 'alice']); assert.equal(u.code, 0, u.err);
+  const r = publish(A); assert.notEqual(r.code, 0); assert.doesNotMatch(r.out, /ACCEPTED/);
+  assert.equal(H.cli(ctx.repo, PORT, ['contract', 'list'], { env: {} }).out.includes('money.contract'), false);
+}));
+
+test('7: odd symbol and path names are fenced in the refusal and never put in a command', () => run(async (ctx) => {
+  const A = new H.Agent(ctx.d, ctx.repo, 'odd'); await A.start();
+  const f = "src/it's \u0001 x.js";
+  fs.mkdirSync(A.abs('src'), { recursive: true });
+  // a shared symbol in an oddly named file: main must have it, so create it on a landed branch first
+  await A.write(f, 'export function odd(a) {\n  return a;\n}\nexport function selfTest() { return true; }\n'); A.commit('add');
+  assert.equal(A.land(['--task', 'add']).json.status, 'landed');
+  const U = new H.Agent(ctx.d, ctx.repo, 'user'); await U.start();
+  await U.write('src/use.js', `import { odd } from "./it's \u0001 x.js";\nexport const v = odd(1);\nexport function selfTest() { return true; }\n`); U.commit('use');
+  assert.equal(U.land(['--task', 'use']).json.status, 'landed');
+  const W = new H.Agent(ctx.d, ctx.repo, 'watcher'); await W.start(); await W.read(f); // another worktree reads it: shared
+  const B = new H.Agent(ctx.d, ctx.repo, 'brk'); await B.start(); await B.read(f);
+  await B.edit(f, 'odd(a)', 'odd(a, b)'); B.commit('brk');
+  const r = B.land(['--task', 'brk']).json;
+  const why = (r.reasons || []).join(' | ');
+  assert.equal(r.status, 'blocked', why);
+  assert.ok(!/[\u0000-\u001f]/.test(why), 'no control characters'); assert.match(why, /«src\/it's {1,3}x\.js#odd»/);
+  assert.ok(!why.includes("contract publish 'src/it's"), 'no command built from an odd name');
+}));

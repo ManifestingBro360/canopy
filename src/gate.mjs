@@ -9,8 +9,8 @@
 // - The signed record names the commit, its parents and its tree, so it cannot
 //   be replayed onto another history.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, lstatSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, lstatSync, openSync, fstatSync, readSync, closeSync, constants as fsc } from 'node:fs';
+import { join, basename, dirname, posix } from 'node:path';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { homedir, tmpdir, platform } from 'node:os';
 import { extract } from './extract.mjs';
@@ -21,19 +21,77 @@ import { usersExist, admins, activeUsers } from './access.mjs';
 import { newDeps, lookup } from './advisories.mjs';
 import { dossier, runManager } from './manager.mjs';
 import { signRecord } from './sign.mjs';
-import { fence, isBreaking } from './engine.mjs';
+import { fence, isBreaking, publishCommand } from './engine.mjs';
 
-// Test cases and assertions in a test file's text, comments removed so that
-// commenting a check out counts as removing it. Approximate, and the same for
-// the old and the new text, which is all the comparison needs.
-const CASE_RE = /(?:^|[^\w$.])(?:it|test|specify)(?:\.each)?\s*\(|^\s*(?:async\s+)?def test\w*|^\s*func Test\w+/gm;
-const ASSERT_RE = /\b(?:assert|expect)\b\s*[.(]|^\s*assert\s|\bt\.(?:Error|Errorf|Fatal|Fatalf|Fail)\b|\.should\b/gm;
-export function testStats(text) {
-  const t = String(text).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/.*$/gm, '$1').replace(/^\s*#.*$/gm, '');
-  return { cases: (t.match(CASE_RE) || []).length, asserts: (t.match(ASSERT_RE) || []).length };
+// Test cases and assertions in a test file's text. Comments are removed and the
+// content of string and template literals is replaced by a token (equal text,
+// equal token), so that text which only looks like a test or an assertion does
+// not count, and commenting a check out counts as removing it. Constant
+// assertions (assert.ok(true), assert.equal(1, 1), assert.equal(x, x)) and
+// skipped or todo tests do not count. Approximate, and the same for the old and
+// the new text, which is all the comparison needs.
+function scrub(text, ext, keep = false) {
+  const py = ext === 'py', lits = new Map(), n = text.length;
+  let out = '', i = 0;
+  while (i < n) {
+    const c = text[i], d = text[i + 1];
+    if (!py && c === '/' && d === '/') { while (i < n && text[i] !== '\n') i++; continue; }
+    if (!py && c === '/' && d === '*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? n : e + 2; out += ' '; continue; }
+    if (py && c === '#') { while (i < n && text[i] !== '\n') i++; continue; }
+    if (c === '"' || c === "'" || (c === '`' && !py)) {
+      let j = i + 1;
+      while (j < n && text[j] !== c) { if (text[j] === '\\') j++; else if (c !== '`' && text[j] === '\n') break; j++; }
+      const body = text.slice(i + 1, j);
+      if (keep) out += c + body + c;
+      else { if (!lits.has(body)) lits.set(body, lits.size); out += `"S${lits.get(body)}"`; }
+      i = j + 1; continue;
+    }
+    out += c; i++;
+  }
+  return out;
 }
+const CASE_RE = /(?:^|[^\w$.])(?:it|test|specify)(?:\.each)?\s*\(|^\s*(?:async\s+)?def test\w*|^\s*func Test\w+/gm;
+const ASSERT_CALL = /(?:^|[^\w$.])assert(?:\.(\w+))?\s*\(/g;
+const ASSERT_OTHER = /\bexpect\s*\(|^\s*assert\s+(?!True\b|1\b)|\bt\.(?:Error|Errorf|Fatal|Fatalf|Fail)\b|\.should\b/gm;
+const LITERAL = /^(?:true|false|null|undefined|\d+(?:\.\d+)?|"S\d+"|!0|!1|\[\]|\{\})$/;
+function callArgs(t, open) {
+  const args = []; let depth = 0, cur = '';
+  for (let i = open; i < t.length; i++) {
+    const c = t[i];
+    if ('([{'.includes(c)) { if (depth++) cur += c; }
+    else if (')]}'.includes(c)) { if (--depth === 0) { if (cur.trim()) args.push(cur.trim()); return args; } cur += c; }
+    else if (c === ',' && depth === 1) { args.push(cur.trim()); cur = ''; }
+    else cur += c;
+  }
+  return args;
+}
+export function testStats(text, ext = 'js') {
+  const t = scrub(String(text), ext);
+  let cases = 0, asserts = 0;
+  for (const m of t.matchAll(CASE_RE)) {
+    const rest = t.slice(m.index + m[0].length, m.index + m[0].length + 400);
+    const head = rest.split(/=>|\bfunction\b/)[0];
+    if (!/\b(?:skip|todo)\s*:/.test(head)) cases++;
+  }
+  for (const m of t.matchAll(ASSERT_CALL)) {
+    const args = callArgs(t, m.index + m[0].length - 1), name = m[1] || '';
+    const equal = ['equal', 'strictEqual', 'deepEqual', 'deepStrictEqual'].includes(name);
+    const constant = (!name || name === 'ok') ? args.length > 0 && LITERAL.test(args[0])
+      : equal ? args.length >= 2 && (args[0] === args[1] || (LITERAL.test(args[0]) && LITERAL.test(args[1]))) : false;
+    if (!constant) asserts++;
+  }
+  asserts += (t.match(ASSERT_OTHER) || []).length;
+  return { cases, asserts };
+}
+// A path a test runner will pick up again; renaming a test file to anything else removes it.
+const discoverable = (p) => isTestFile(p) && /\.(m?js|cjs|jsx|tsx?|py|go|rb|java|php|cs|rs|kt)$/.test(p);
+export const SAFE_REL = /^(?!-)[\w./@-]+$/;
+const safeRel = (p) => SAFE_REL.test(p) && !p.split('/').some((x) => x === '..' || x === '.git' || x === '');
 
-export const testCommand = (rel) => `node --test ${rel}`;
+export function testCommand(rel, tap = false) {
+  if (!safeRel(rel)) throw new Error('unsafe test path');
+  return `node --test${tap ? ' --test-reporter=tap' : ''} ${rel}`;
+}
 
 const real = (p) => { try { return realpathSync(p); } catch { return p; } };
 
@@ -102,7 +160,7 @@ function run(cmd, cwd, opts, timeoutMs) {
     // Its own process group, so a timeout takes the whole tree down, not just the shell.
     const child = spawn(sb.file, sb.args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let tail = '';
-    const add = (d) => { tail = (tail + d.toString('utf8')).slice(-3000); };
+    const add = (d) => { tail = (tail + d.toString('utf8')).slice(-(opts.keep || 3000)); };
     child.stdout.on('data', add); child.stderr.on('data', add);
     const timer = setTimeout(() => { tail += '\n[canopy] timed out'; try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }, timeoutMs);
     child.on('error', (e) => { clearTimeout(timer); res({ cmd, code: 127, ms: Math.round(performance.now() - t0), tail: String(e), mode: sb.mode }); });
@@ -151,9 +209,10 @@ export class Gate {
       const oldT = showFile(repo, mb, p);
       const moved = entries.find((x) => x.st === 'R' && x.old === p);
       const newT = showFile(repo, C, moved ? moved.path : p);
-      if (newT === null) { testReductions.push(p); continue; }
+      if (newT === null || (moved && !discoverable(moved.path))) { testReductions.push(p); continue; }
       if (typeof oldT !== 'string' || oldT === newT) continue;
-      const o = testStats(oldT), n = testStats(newT);
+      const ext = (/\.(\w+)$/.exec(moved ? moved.path : p) || [])[1];
+      const o = testStats(oldT, ext), n = testStats(newT, ext);
       if (!o.cases && !o.asserts) { if (Number(d) > 0) testReductions.push(p); continue; } // not a test layout we can count: any removed line holds
       if (n.cases < o.cases || n.asserts < o.asserts) testReductions.push(p);
       else testsModified.push(p);
@@ -252,14 +311,15 @@ export class Gate {
         const sg = sigs.get(w.node);
         if ((w.kind !== 'signature' && w.kind !== 'removed') || !w.node.includes('#') || !sg || !isBreaking(w.kind, sg.old, sg.new) || !e.isShared(w.node, wt)) continue;
         const ct = e.contractOf(w.node, wt);
-        const cmd = `canopy contract publish '${w.node}' --test <test-file>`;
+        const sym = fence(w.node, 160), cmd = publishCommand(w.node);
         const what = w.kind === 'removed' ? 'removes' : 'changes the signature of';
-        if (!ct) blocked.push(`this branch ${what} ${w.node}, which other code uses, so existing callers will break, and no contract is published. Write a test that fails on ${e.main} and passes on this branch, commit it, then run \`${cmd}\`. Or keep old callers working (for example, give a new argument a default).`);
-        else if (ct.sig !== sg.new) blocked.push(`${w.node} changed again after its contract was published. Publish it again: \`canopy contract publish '${w.node}' --test ${ct.test_path}\``);
+        if (!ct) blocked.push(`this branch ${what} ${sym}, which other code uses, so existing callers will break, and no contract is published. Write a test that fails on ${e.main} and passes on this branch, commit it, then run \`${cmd}\`. Or keep old callers working (for example, give a new argument a default).`);
+        else if (!safeRel(ct.test_path)) blocked.push(`the contract test path ${fence(ct.test_path, 100)} for ${sym} is not an allowed name. Publish it again from a file with a plain name.`);
+        else if (ct.sig !== sg.new) blocked.push(`${sym} changed again after its contract was published. Publish it again: \`${publishCommand(w.node, ct.test_path)}\``);
         else {
           const blob = tryGit(repo, ['rev-parse', '--verify', '--quiet', `${C}:${ct.test_path}`]);
-          if (!blob) blocked.push(`the contract test ${ct.test_path} for ${w.node} is not committed on this branch. Commit it and land again.`);
-          else if (blob !== ct.test_blob) blocked.push(`the contract test ${ct.test_path} for ${w.node} changed after it was published. Publish it again: \`canopy contract publish '${w.node}' --test ${ct.test_path}\``);
+          if (!blob) blocked.push(`the contract test ${fence(ct.test_path, 100)} for ${sym} is not committed on this branch. Commit it and land again.`);
+          else if (blob !== ct.test_blob) blocked.push(`the contract test ${fence(ct.test_path, 100)} for ${sym} changed after it was published. Publish it again: \`${publishCommand(w.node, ct.test_path)}\``);
           else { contractsUsed.push({ node: w.node, test: ct.test_path, sig: ct.sig }); const tc = testCommand(ct.test_path); if (!plan.checks.includes(tc)) plan.checks.push(tc); }
         }
       }
@@ -542,7 +602,7 @@ export class Gate {
         const held = status === 'needs-human', waiting = record.waiting_on || [];
         e.out.emit({ kinds: [held ? 'approval' : 'blocked', ...(sec ? ['security'] : [])], id, branch, by, files: a.touched, waiting, once: `${status}|${id}|${C}|${record.basis || reasons.join('|')}`,
           title: held ? `Approval needed: ${branch}` : `Landing refused: ${branch}`,
-          lines: [`Purpose: ${task}`, by ? `Asked for by: ${by}` : '', ...((a.testsModified || []).length ? [`Tests edited, counts not lower: ${a.testsModified.slice(0, 6).join(', ')}`] : []), ...reasons.slice(0, 5).map((r) => `- ${r}`),
+          lines: [`Purpose: ${task}`, by ? `Asked for by: ${by}` : '', ...((a.testsModified || []).length ? [`Tests edited, counts not lower: ${a.testsModified.slice(0, 6).map((f) => fence(f, 100)).join(', ')}`] : []), ...reasons.slice(0, 5).map((r) => `- ${r}`),
             ...(held ? [waiting.length ? `Waiting on: ${waiting.map((q) => (q.token ? 'anyone holding the approval token' : `${q.kind === 'person' ? 'a person' : q.section || 'the whole repository'} (${q.owners.join(', ') || 'no one eligible'})`)).join('; ')}` : '', `To approve: canopy approve ${id}`] : [])] });
       }
       return { status, id, reasons, record };
@@ -645,7 +705,7 @@ export class Gate {
         this.finish(id, wt, branch, C, R, record, a);
         e.store.audit(who, 'land.landed', branch, { id, commit: R.slice(0, 12), approvals: approvers.map((x) => x.user) });
         if (e.out) e.out.emit({ kinds: ['landed'], id, branch, by, files: a.touched, title: `Landed on ${e.main}: ${branch}`,
-          lines: [`Purpose: ${task}`, by ? `By: ${by}` : '', ...((a.testsModified || []).length ? [`Tests edited, counts not lower: ${a.testsModified.slice(0, 6).join(', ')}`] : []), approvers.length ? `Approved by: ${approvers.map((x) => x.user).join(', ')}` : '', `Commit: ${R.slice(0, 10)}`] });
+          lines: [`Purpose: ${task}`, by ? `By: ${by}` : '', ...((a.testsModified || []).length ? [`Tests edited, counts not lower: ${a.testsModified.slice(0, 6).map((f) => fence(f, 100)).join(', ')}`] : []), approvers.length ? `Approved by: ${approvers.map((x) => x.user).join(', ')}` : '', `Commit: ${R.slice(0, 10)}`] });
         return { status: 'landed', id, commit: R, record, warning };
       });
     } finally { this.busy--; }
@@ -721,21 +781,47 @@ export class Gate {
     const e = this.e, no = (message) => ({ status: 'refused', message });
     const w = worktreeOf(String(cwd || ''));
     if (!w || w.common !== e.common) return { status: 'error', message: 'this directory is not a worktree of the repository canopyd serves' };
+    // Same rule as landing: once canopyd has users, the caller must be one of them.
+    if (usersExist(e.store) && !(who && who.user)) return { status: 'error', message: 'this canopyd has users, so publishing a contract needs to know who you are. Set CANOPY_TOKEN to the token `canopy user add` printed for you.' };
     node = String(node || ''); test = String(test || '');
     if (!/^[^#\s]+#[^#\s]+$/.test(node)) return no(`name the symbol as '<path>#<symbol>', for example 'src/money.js#toCents'`);
     const row = e.store.get("select kind, sig_old, sig_new, session from writes where worktree=? and node=? and kind in ('signature','removed')", w.top, node);
-    if (!row) return no(`this worktree has no recorded change to the signature of ${node}. Make the change first (run \`canopy checkin\` if your harness has no hooks), then publish.`);
-    if (!isBreaking(row.kind, row.sig_old, row.sig_new)) return no(`the change to ${node} keeps existing calls working, so it needs no contract.`);
+    if (!row) return no(`this worktree has no recorded change to the signature of ${fence(node, 160)}. Make the change first (run \`canopy checkin\` if your harness has no hooks), then publish.`);
+    if (!isBreaking(row.kind, row.sig_old, row.sig_new)) return no(`the change to ${fence(node, 160)} keeps existing calls working, so it needs no contract.`);
     if (!test || !/^[\w./@-]+$/.test(test) || test.startsWith('-') || test.startsWith('/') || test.split('/').includes('..') || test.split('/').includes('.git'))
       return no('--test must be a path inside this worktree, for example test/money.contract.test.js');
     const root = real(w.top), abs = real(join(w.top, test));
     if (!abs.startsWith(root + '/')) return no(`${test} is outside this worktree. Put the test inside it and publish again.`);
     const rel = abs.slice(root.length + 1);
+    // The name after links are resolved is what gets stored and put in a command: check it, not only what was typed.
+    if (!safeRel(rel)) return no(`${fence(rel, 100)} is not an allowed name. A contract test path may use letters, digits and . / _ - @ only (no spaces, quotes or other characters), after any link is resolved. Rename the file and publish again.`);
     if (!isTestFile(rel) || !/\.(m?js|cjs)$/.test(rel)) return no(`${rel} is not a test file this step can run. Contracts run Node test files: a name such as ${rel.replace(/(\.[a-z]+)?$/, '.test.js')}, in a test folder or ending .test.js.`);
-    let bytes, text;
-    try { bytes = readFileSync(abs); text = bytes.toString('utf8'); } catch { return no(`${rel} could not be read. Write the test file first.`); }
-    if (bytes.length > 200_000) return no(`${rel} is larger than 200 KB; a contract test should be small.`);
+    // Open without following links or blocking, then look at what was opened: a pipe or a huge file must not stall canopyd.
+    let bytes, text, fd;
+    try { fd = openSync(abs, fsc.O_RDONLY | fsc.O_NONBLOCK | fsc.O_NOFOLLOW); } catch { return no(`${rel} could not be read. Write the test file first.`); }
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile()) return no(`${rel} is not a regular file. A contract test must be an ordinary file.`);
+      if (st.size > 200_000) return no(`${rel} is larger than 200 KB; a contract test should be small.`);
+      bytes = Buffer.alloc(st.size);
+      let off = 0;
+      while (off < st.size) { const k = readSync(fd, bytes, off, st.size - off, off); if (!k) break; off += k; }
+      bytes = bytes.subarray(0, off); text = bytes.toString('utf8');
+    } finally { closeSync(fd); }
     if (!testStats(text).cases) return no(`${rel} contains no test case (a call to test( or it( ). Write one that pins the new behaviour.`);
+    // The contract must be about this symbol: it loads only code that is on main, imports the file that defines
+    // the symbol, and names it. (A test that imports a helper only the branch has, or never touches the symbol,
+    // fails on main for reasons that say nothing about the change.)
+    e.refresh();
+    const clean = scrub(text, 'js', true);
+    const specs = [...clean.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"`])(\.{1,2}\/[^'"`\n]*)\1/g)].map((m) => m[2]);
+    const onMain = (f) => !f.startsWith('..') && tryGit(e.repo, ['cat-file', '-t', `${e.graph.rev}:${f}`]) === 'blob';
+    const resolved = specs.map((sp) => ({ sp, file: posix.normalize(posix.join(dirname(rel), sp)) }));
+    const missing = resolved.filter((x) => !onMain(x.file));
+    if (missing.length) return no(`${rel} imports ${missing.slice(0, 4).map((x) => fence(x.sp, 80)).join(', ')}, which is not on ${e.main}. A contract test runs against ${e.main}'s source, so it may load only files ${e.main} already has. Put what the test needs in the test file itself, or import only existing files.`);
+    const defFile = pathOf(node), nm = bare(nameOf(node));
+    if (!resolved.some((x) => x.file === defFile)) return no(`${rel} does not import ${fence(defFile, 100)}, the file that defines ${fence(node, 160)}. Import ${defFile} directly (for example: import { ${nm} } from '<relative path to ${defFile}>') so the test is about this symbol.`);
+    if (!new RegExp('(^|[^\\w$])' + nm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^\\w$])').test(clean)) return no(`${rel} never uses the symbol's name (${fence(nm, 80)}). Call or inspect ${nm} in the test so it pins this change.`);
     // The id of the exact bytes that will be run, taken from them, not from a second read of the file.
     const blob = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
     // Run it on main's source, in a scratch checkout, in the sandbox.
@@ -753,9 +839,14 @@ export class Gate {
       let link = false; try { link = lstatSync(target).isSymbolicLink(); } catch { /* not there yet */ }
       if (!target.startsWith(real(dir) + '/') || link) return no(`${rel} would follow a link in ${e.main} out of the scratch checkout. Use a different file name or folder.`);
       writeFileSync(target, bytes);
-      r = await run(testCommand(rel), dir, { home: this.home, common: e.common, network: rs.network, dir, tmp, port: this.port }, rs.checkTimeoutMs);
+      r = await run(testCommand(rel, true), dir, { home: this.home, common: e.common, network: rs.network, dir, tmp, port: this.port, keep: 400_000 }, rs.checkTimeoutMs);
     } finally { this.release(dir); }
     if (r.code === 0) return no(`${rel} PASSES on ${e.main}'s current source, so it does not show that anything changed. A contract test must fail on the old code and pass on yours: assert the new behaviour (for example, that the new signature works and the old form is refused), run it on ${e.main} to see it fail, then publish again.`);
+    // Exit 1 with a failed test case. A file that could not be loaded (import, syntax, a throw at the top)
+    // is reported as a failure of the file itself, which is not a contract; when that cannot be told, refuse.
+    const failed = [...r.tail.matchAll(/^\s*not ok \d+ - (.*)$/gm)].map((m) => m[1].trim());
+    const fileLevel = (n) => n === rel || n === basename(rel) || n.endsWith('/' + basename(rel));
+    if (r.code === 1 && !/timed out/.test(r.tail) && !failed.some((n) => !fileLevel(n))) return no(`${rel} did not fail by a test on ${e.main}: it failed to load or run (an import, syntax or top-level error), which says nothing about the change (${fence(r.tail.slice(-300), 300)}). A contract test must load, run its test cases on ${e.main}, and fail an assertion there.`);
     if (r.code !== 1 || /timed out/.test(r.tail)) return no(`${rel} could not be run to a clean result on ${e.main} (exit ${r.code}): ${fence(r.tail.slice(-300), 300)} Fix the test so it runs and fails by an assertion on the old code.`);
     const m = /(^|\n)\s*(?:test|it)\s*\(/.exec(text);
     const excerpt = text.slice(m ? m.index + m[1].length : 0).replace(/\s+/g, ' ').trim().slice(0, 400);
@@ -766,7 +857,7 @@ export class Gate {
     e.store.event('contract', { wt: e.wtName(w.top), branch, node, test: rel });
     e.store.audit(who, 'contract.publish', node, { branch, test: rel });
     e.announceContract(e.contractOf(node, w.top));
-    return { status: 'accepted', node, test: rel, message: `contract accepted: ${rel} fails on ${e.main} (exit 1). It will also have to pass on the merge commit when you land. Other agents that use ${node} are being shown it.` };
+    return { status: 'accepted', node, test: rel, message: `contract accepted: ${rel} fails on ${e.main} (exit 1). It will also have to pass on the merge commit when you land. Other agents that use ${fence(node, 160)} are being shown it.` };
   }
 
   contracts() {
