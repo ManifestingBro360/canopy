@@ -318,7 +318,15 @@ test('C-marks: a removed test name or a new skip is seen even when the counts ar
   assert.ok([...o.titles].some((t) => !n.titles.has(t)), 'the dropped name is noticed');
   const wrapped = "describe.skip('all', () => {\n" + old + "\n});";
   assert.deepEqual(testStats(old), testStats(wrapped));
-  assert.ok(testMarks(wrapped).skips > o.skips, 'the skipped group is noticed');
-  assert.equal(testMarks("test('a', () => { const s = 'x.skip( skip: '; assert.ok(v); });").skips, 0, 'text in a string is not a skip');
+  assert.ok(testMarks(wrapped).skips.size > o.skips.size, 'the skipped group is noticed');
+  assert.equal(testMarks("test('a', () => { const s = 'x.skip( skip: '; assert.ok(v); });").skips.size, 0, 'text in a string is not a skip');
+  // A title that only appears inside a string does not stand in for the removed test.
+  const hidden = "const keep = \"test('refund is exact', \";\n" + padded;
+  assert.ok(!testMarks(hidden).titles.has('refund is exact'));
+  // Moving a skip from one test to another keeps the number of markers and is still seen.
+  const s1 = "test.skip('a', () => {}); test('b', () => { assert.ok(v); });", s2 = "test('a', () => {}); test.skip('b', () => { assert.ok(v); });";
+  assert.ok([...testMarks(s2).skips].some((k) => !testMarks(s1).skips.has(k)));
+  for (const src of ["test.only('a', () => {})", "it.skipIf(c)('a', () => {})", "fit('a', () => {})", "test('a', { only: true }, () => {})", "const t = test.skip; t('a', () => {})"]) assert.equal(testMarks(src).skips.size, 1, src);
+  assert.equal(testMarks('@pytest.mark.xfail\ndef test_a():\n    assert f()\n', 'py').skips.size, 1);
   assert.deepEqual([...testMarks('def test_refund():\n    assert f() == 2\n', 'py').titles], ['test_refund']);
 });

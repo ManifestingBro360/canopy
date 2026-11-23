@@ -30,8 +30,8 @@ import { fence, isBreaking, publishCommand } from './engine.mjs';
 // assertions (assert.ok(true), assert.equal(1, 1), assert.equal(x, x)) and
 // skipped or todo tests do not count. Approximate, and the same for the old and
 // the new text, which is all the comparison needs.
-function scrub(text, ext, keep = false) {
-  const py = ext === 'py', lits = new Map(), n = text.length;
+function scrub(text, ext, keep = false, lits = new Map()) {
+  const py = ext === 'py', n = text.length;
   let out = '', i = 0;
   while (i < n) {
     const c = text[i], d = text[i + 1];
@@ -87,11 +87,17 @@ export function testStats(text, ext = 'js') {
 // test while padding with another, or wrap tests in something skipped. So the
 // names of the old test cases must all still be there, and nothing new may be
 // marked skip or todo.
-const TITLE_RE = /(?:^|[^\w$.])(?:it|test|specify)(?:\.each)?\s*\(\s*(["'`])((?:\\.|(?!\1)[^\\\n])*)\1|^\s*(?:async\s+)?def (test\w*)|^\s*func (Test\w+)/gm;
-const SKIP_RE = /\.(?:skip|todo)\s*\(|\b(?:skip|todo)\s*:|(?:^|[^\w$.])(?:xit|xtest|xdescribe)\s*\(|@(?:pytest\.mark\.|unittest\.)skip|\bt\.Skip/g;
+const TITLE_RE = /(?:^|[^\w$.])(?:it|test|specify)(?:\.each)?\s*\(\s*"S(\d+)"|^\s*(?:async\s+)?def (test\w*)|^\s*func (Test\w+)/gm;
+// Anything that switches a test off or narrows the run: skip, todo, only, conditional skips, the x- and f- forms,
+// and the markers other runners use. Matched on text with literals replaced, so a string cannot stand in for one.
+const SKIP_RE = /\.(?:skip|todo|only|skipIf|runIf|failing|fails)\b|\b(?:skip|todo|only)\s*:|(?:^|[^\w$.])(?:xit|xtest|xdescribe|xcontext|xspecify|fit|fdescribe|pending)\s*\(|@(?:pytest\.mark\.(?:skip|xfail)|unittest\.(?:skip|expectedFailure))|@(?:Disabled|Ignore)\b|#\[ignore\]|\bt\.Skip/g;
 export function testMarks(text, ext = 'js') {
-  const kept = scrub(String(text), ext, true);
-  return { titles: new Set([...kept.matchAll(TITLE_RE)].map((m) => m[2] ?? m[3] ?? m[4])), skips: (scrub(String(text), ext).match(SKIP_RE) || []).length };
+  const lits = new Map(), t = scrub(String(text), ext, false, lits);
+  const body = [...lits.keys()], lit = (k) => body[Number(k)] ?? '';
+  const titles = new Set([...t.matchAll(TITLE_RE)].map((m) => (m[1] !== undefined ? lit(m[1]) : m[2] ?? m[3])));
+  // Each marker with what follows it (the test's name, with literals put back), so moving a skip from one test to another shows.
+  const skips = new Set([...t.matchAll(SKIP_RE)].map((m) => t.slice(m.index, m.index + m[0].length + 60).replace(/"S(\d+)"/g, (_, k) => JSON.stringify(lit(k))).replace(/\s+/g, ' ').trim()));
+  return { titles, skips };
 }
 // A path a test runner will pick up again; renaming a test file to anything else removes it.
 const discoverable = (p) => isTestFile(p) && /\.(m?js|cjs|jsx|tsx?|py|go|rb|java|php|cs|rs|kt)$/.test(p);
@@ -225,7 +231,7 @@ export class Gate {
       const o = testStats(oldT, ext), n = testStats(newT, ext);
       if (!o.cases && !o.asserts) { if (Number(d) > 0) testReductions.push(p); continue; } // not a test layout we can count: any removed line holds
       const om = testMarks(oldT, ext), nm = testMarks(newT, ext);
-      if (n.cases < o.cases || n.asserts < o.asserts || nm.skips > om.skips || [...om.titles].some((t) => !nm.titles.has(t))) testReductions.push(p);
+      if (n.cases < o.cases || n.asserts < o.asserts || [...nm.skips].some((k) => !om.skips.has(k)) || [...om.titles].some((t) => !nm.titles.has(t))) testReductions.push(p);
       else testsModified.push(p);
     }
     const touched = new Set();
