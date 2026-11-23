@@ -94,7 +94,7 @@ const commands = {
       const rp = join(p.top, '.canopy', 'rules.json');
       if (existsSync(rp)) return;
       mkdirSync(dirname(rp), { recursive: true });
-      writeFileSync(rp, JSON.stringify({ version: 1, revalidate: 'always', setup: [], rules: [{ path: '', checks: [], min_coverage: 0 }], protected_globs: [] }, null, 2) + '\n');
+      writeFileSync(rp, JSON.stringify({ version: 1, revalidate: 'always', setup: [], rules: [{ path: '', checks: [], min_coverage: 0 }], protected_globs: [], contracts: { require_for_breaking: true } }, null, 2) + '\n');
       console.log('wrote ' + rp);
     };
     if (harness === 'codex') {
@@ -140,7 +140,7 @@ const commands = {
     const rp = join(p.top, '.canopy', 'rules.json');
     if (!existsSync(rp)) {
       mkdirSync(dirname(rp), { recursive: true });
-      writeFileSync(rp, JSON.stringify({ version: 1, revalidate: 'always', setup: [], rules: [{ path: '', checks: [], min_coverage: 0 }], protected_globs: [] }, null, 2) + '\n');
+      writeFileSync(rp, JSON.stringify({ version: 1, revalidate: 'always', setup: [], rules: [{ path: '', checks: [], min_coverage: 0 }], protected_globs: [], contracts: { require_for_breaking: true } }, null, 2) + '\n');
     }
     console.log(`wrote ${sp}\nwrote ${rp}\n\nNext:\n  1. Put your test command in .canopy/rules.json under rules[0].checks.\n  2. Commit both files on main.\n  3. Run \`canopy serve\` in this repository and open http://127.0.0.1:${prt}\n  4. Agents work in their own worktrees and run \`canopy land\` when done.`);
   },
@@ -333,6 +333,21 @@ const commands = {
     console.log(r.items.length ? r.text : 'Nothing this worktree has read or written has changed on main since.');
   },
 
+  // A breaking change to shared code needs a contract: a test that fails on main and passes here.
+  async contract() {
+    const sub = positional[0];
+    if (sub === 'list') {
+      const rows = await api('GET', '/api/contracts');
+      if (!rows.length) return console.log('No contracts published.');
+      for (const c of rows) console.log(`${c.node}  ${c.kind === 'removed' ? 'removed' : c.sig}  test ${c.test_path}  branch ${c.branch}  ${ago(c.ts)} ago`);
+      return;
+    }
+    if (sub !== 'publish' || !positional[1] || typeof flag('test') !== 'string') { console.error("usage: canopy contract publish '<path>#<symbol>' --test <test-file>\n       canopy contract list"); process.exit(1); }
+    const r = await api('POST', '/api/contract/publish', { cwd, node: positional[1], test: flag('test') });
+    console.log(r.status === 'accepted' ? 'ACCEPTED  ' + r.message : (r.status || 'ERROR').toUpperCase() + '  ' + (r.message || r.error || ''));
+    if (r.status !== 'accepted') process.exit(2);
+  },
+
   // For a harness with no hooks: record where this agent is and what it changed, and print what it should know.
   async checkin() {
     const r = await api('POST', '/api/checkin', { cwd, harness: typeof flag('harness') === 'string' ? flag('harness') : 'agent', model: typeof flag('model') === 'string' ? flag('model') : undefined });
@@ -408,6 +423,7 @@ if (!cmd || !commands[cmd]) {
   canopy why <path>[#symbol]   why this code is the way it is
   canopy wait '<path>#<sym>'   block until another agent's change to it lands
   canopy catchup [path]        what changed on main since you last looked, and the lines to re-read
+  canopy contract publish|list a breaking change to shared code needs a test that fails on main
   canopy checkin               (harness with no hooks) record your work, print what you should know
   canopy user add|list|disable people and their tokens (run on the Canopy host)
   canopy whoami | audit        who canopyd thinks you are; who did what, from where

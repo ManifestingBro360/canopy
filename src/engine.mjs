@@ -74,7 +74,25 @@ export function paramDelta(sigOld, sigNew) {
   if (need(b).length > need(a).length) return 'An argument that had a default is now required: a call that left it out will not work as it is.';
   if (gone.length) return `It no longer takes ${gone.map((x) => fence(x.name, 30)).join(', ')}: a call that passes ${gone.length === 1 ? 'it' : 'them'} needs changing.`;
   if (a.length === b.length && a.some((x, i) => x.name !== b[i].name) && a.every((x) => b.some((y) => y.name === x.name))) return 'Its arguments are in a different order: check every call.';
+  if (b.length > a.length && a.some((x, i) => b[i].name !== x.name)) return 'An argument was inserted before existing ones, so the positions of the existing arguments changed: a call written for the old form will not work as it is.';
   return b.length > a.length ? 'The added arguments are optional: existing calls keep working.' : '';
+}
+
+// True when a change of signature forces existing callers to change. Adding an
+// optional or defaulted argument is not breaking; removing or reshaping one is.
+// A signature that cannot be read as a parameter list is treated as breaking
+// (fail closed). A change in types alone is not seen: out of scope in this step.
+export function isBreaking(kind, sigOld, sigNew) {
+  if (kind === 'removed') return true;
+  if (kind === 'signature' && (!params(sigOld) || !params(sigNew))) return true;
+  const d = paramDelta(sigOld, sigNew);
+  return !!d && !d.startsWith('The added arguments are optional');
+}
+
+// The publish command for a symbol, only when its name is plain enough to paste
+// into a shell; otherwise the name is shown fenced and the command is described.
+export function publishCommand(node, test = '<test-file>') {
+  return /^[\w./@$-]+#[\w$.]+$/.test(node) && !node.includes("'") ? `canopy contract publish '${node}' --test ${test}` : `canopy contract publish with the path#symbol named above (${fence(node, 160)}) and --test ${test}`;
 }
 
 export class Engine {
@@ -509,8 +527,10 @@ export class Engine {
         }
       }
       this.fanOut(c, ch);
+      this.promptAuthor(c, ch);
     }
     for (const node of reverted) {
+      s.run('update notices set open=0 where target=? and node=? and source=?', c.wt, node, c.wt + '\u001fcontract');
       const open = s.all('select id, target from notices where source=? and node=? and open=1', c.wt, node);
       for (const n of open) {
         s.run('update notices set open=0 where id=?', n.id);
@@ -524,7 +544,7 @@ export class Engine {
       const moving = s.all("select worktree, node, kind, sig_old, sig_new from writes where worktree != ? and kind in ('signature','removed') and node like '%#%'", c.wt);
       for (const m of moving) {
         if (!mine.has(bare(nameOf(m.node))) || next.has(m.node)) continue;
-        this.notify(c.wt, m.node, m.worktree, 'high', m.kind, this.changeText(m.node, m.kind, m.sig_old, m.sig_new, this.wtBranch(m.worktree), 'reference it in code you just wrote'));
+        this.notify(c.wt, m.node, m.worktree, 'high', m.kind, this.changeText(m.node, m.kind, m.sig_old, m.sig_new, this.wtBranch(m.worktree), 'reference it in code you just wrote', this.contractOf(m.node, m.worktree)));
         // And tell the author of the breaking change. Whoever writes against main is
         // entitled to; the one changing a function's shape is the one who can act:
         // keep the old form working, or expect to update this caller.
@@ -543,11 +563,52 @@ export class Engine {
     return changed;
   }
 
-  changeText(node, kind, sigOld, sigNew, branch, why) {
+  changeText(node, kind, sigOld, sigNew, branch, why, contract) {
     const what = kind === 'removed' ? 'was removed' : 'changed its signature';
     const delta = kind === 'removed' ? '' : paramDelta(sigOld, sigNew);
     return `${node} ${what} in an unlanded change on branch ${fence(branch, 60)}. Was ${fence(sigOld)}` + (kind === 'removed' ? '' : `, now ${fence(sigNew)}`) +
-      `.${delta ? ' ' + delta : ''} You ${why}. It is not on ${this.main} yet, so code written against either version may need to change before you land.`;
+      `.${delta ? ' ' + delta : ''} You ${why}. It is not on ${this.main} yet, so code written against either version may need to change before you land.` +
+      (contract ? this.contractText(contract, branch) : '');
+  }
+
+  // What a caller needs from a published contract: the new form, a piece of the
+  // test that pins it, and when to adapt. The test is another agent's text: fenced.
+  contractText(c, branch) {
+    return ` The author published a contract for this change: new signature ${fence(c.sig, 160)}; test ${fence(c.test_path, 100)} starts ${fence(c.excerpt, 398)}` +
+      ` Write your calls to match it now if you choose to build on branch ${fence(branch, 60)}; otherwise adapt them after \`git merge ${this.main}\` once it lands.`;
+  }
+  contractOf(node, wt) { return this.store.get('select * from contracts where node=? and worktree=?', node, wt) || null; }
+
+  // Other worktrees whose record touches this node: reads, references, and work on its dependents.
+  affected(node, except) {
+    const s = this.store, targets = new Map();
+    for (const r of s.all('select worktree from reads where node=? and worktree != ?', node, except)) targets.set(r.worktree, 'read it');
+    const bn = bare(nameOf(node));
+    if (bn.length >= 3) for (const r of s.all('select distinct worktree from refs where name=? and worktree != ?', bn, except)) targets.set(r.worktree, 'reference it in code you are writing');
+    for (const d of this.graph.rdeps.get(node) || []) {
+      for (const r of s.all('select worktree from writes where node=? and worktree != ?', d, except)) targets.set(r.worktree, `are changing ${d}, which depends on it`);
+    }
+    return targets;
+  }
+
+  // Shared code: a caller on main, or another worktree that reads or uses it.
+  isShared(node, wt) { return (this.graph.rdeps.get(node) || new Set()).size > 0 || this.affected(node, wt).size > 0; }
+
+  // Tell everyone who touches a symbol that its author published a contract.
+  announceContract(row) {
+    for (const [wt, why] of this.affected(row.node, row.worktree)) {
+      if (Date.now() - this.wtSeen(wt) > DEAD_MS) continue;
+      this.notify(wt, row.node, row.worktree, 'high', row.kind, this.changeText(row.node, row.kind, row.sig_old, row.sig, this.wtBranch(row.worktree), why, row));
+    }
+  }
+
+  // The author of a breaking change to shared code is told once, when it is first seen.
+  promptAuthor(c, ch) {
+    if (!this.ruleset.contracts.requireForBreaking || !ch.name || (ch.kind !== 'signature' && ch.kind !== 'removed') || !isBreaking(ch.kind, ch.sigOld, ch.sigNew)) return;
+    if (!this.isShared(ch.node, c.wt)) return;
+    this.notify(c.wt, ch.node, c.wt + '\u001fcontract', 'high', 'contract',
+      `You are making a breaking change to ${fence(ch.node, 160)}, which other code uses. Landing will be refused until you either keep old callers working (for example, give a new argument a default) or publish a contract: a test that fails on ${this.main} and passes on your branch. ` +
+      `Run \`${publishCommand(ch.node)}\` once the test is written; callers are then shown it.`);
   }
 
   // Tell every other worktree whose record touches this change.
@@ -557,18 +618,13 @@ export class Engine {
     const high = ch.kind === 'signature' || ch.kind === 'removed';
     const targets = new Map();
     if (high) {
-      for (const r of s.all('select worktree from reads where node=? and worktree != ?', ch.node, c.wt)) targets.set(r.worktree, 'read it');
-      const bn = bare(nameOf(ch.node));
-      if (bn.length >= 3) for (const r of s.all('select distinct worktree from refs where name=? and worktree != ?', bn, c.wt)) targets.set(r.worktree, 'reference it in code you are writing');
-      for (const d of this.graph.rdeps.get(ch.node) || []) {
-        for (const r of s.all('select worktree from writes where node=? and worktree != ?', d, c.wt)) targets.set(r.worktree, `are changing ${d}, which depends on it`);
-      }
+      for (const [wt, why] of this.affected(ch.node, c.wt)) targets.set(wt, why);
     } else {
       for (const r of s.all('select worktree from reads where node=? and strength=2 and worktree != ?', ch.node, c.wt)) targets.set(r.worktree, 'read it');
     }
     for (const [wt, why] of targets) {
       if (Date.now() - this.wtSeen(wt) > DEAD_MS) continue;
-      const text = high ? this.changeText(ch.node, ch.kind, ch.sigOld, ch.sigNew, c.branch, why)
+      const text = high ? this.changeText(ch.node, ch.kind, ch.sigOld, ch.sigNew, c.branch, why, this.contractOf(ch.node, c.wt))
         : `${ch.node} has an unlanded body change on branch ${fence(c.branch, 60)}. You ${why}. Its signature is unchanged.`;
       this.notify(wt, ch.node, c.wt, high ? 'high' : 'low', ch.kind, text);
     }
@@ -717,7 +773,7 @@ export class Engine {
   clearWorktree(wt, keepTaint = false, keepAuthors = false) {
     const s = this.store;
     s.tx(() => {
-      for (const t of ['writes', 'refs', 'reads', 'wtfiles', 'spans']) s.run(`delete from ${t} where worktree=?`, wt);
+      for (const t of ['writes', 'refs', 'reads', 'wtfiles', 'spans', 'contracts']) s.run(`delete from ${t} where worktree=?`, wt);
       // Who wrote what stays on record while the branch is unlanded, whatever is released.
       if (!keepAuthors) s.run('delete from authors where worktree=?', wt);
       s.run('delete from holds where worktree=?', wt);

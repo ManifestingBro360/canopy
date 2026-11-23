@@ -116,7 +116,7 @@ scripted agents against the real hook endpoint and the real gate.
 | Record of what the agent read | No | No | No | Yes, harness-reported |
 | Per-folder rules an agent cannot loosen | For people | For people | No | Yes, read from `main` only |
 | Works on GitHub.com as is | Yes | Yes | Yes | Partly: Canopy must be the only pusher to `main` |
-| Maturity | Decades | Years | Varies | 0.2 |
+| Maturity | Decades | Years | Varies | 0.3 |
 
 ## Measured, including where it loses
 
@@ -130,14 +130,14 @@ this repository; see [the test report](docs/TEST-REPORT.md).
 | Index at start | 0.3 s for 1,000 files, 1.6 s for 10,000 |
 | Fixed cost of one landing | about 0.6 s besides your checks |
 | Eight unrelated branches landing at once (1 s check) | 12.2 s default, 5.9 s with `disjoint`; a plain serial queue took 9.2 s |
-| Tests | 148 pass, 1 skipped (an opt-in live lookup) |
+| Tests | 174 pass, 1 skipped (an opt-in live lookup) |
 
 The safe default is slower than a serial merge queue. Only `disjoint` is
 faster.
 
 ## Where it stands
 
-Canopy is at 0.2. Not proven yet:
+Canopy is at 0.3. Not proven yet:
 
 - **No independent security test.** The gate and sandbox have defensive tests
   only. See [SECURITY.md](SECURITY.md).
@@ -209,6 +209,7 @@ When the work is committed, the agent (or you) runs `canopy land`.
 | `canopy advisories` | Known vulnerabilities in `main`'s dependencies, if switched on |
 | `canopy notify add <name> <webhook-url>`, `notify list`, `notify test <name>` | Where approvals and alerts are sent. Run on the Canopy host |
 | `canopy checkin [--harness h] [--model m]` | For a harness with no hooks: record your work and print what you should know |
+| `canopy contract publish '<path>#<symbol>' --test <file>`, `contract list` | Publish the test that pins a breaking change to shared code (it must fail on `main`), or list the published ones |
 | `canopy hook --harness h` | Forward one hook event from standard input (the Codex adapter) |
 
 ## Rules
@@ -254,8 +255,25 @@ the repair needs a person.
 
 Build, dependency, CI and agent-configuration files (`package.json`, lock
 files, `Makefile`, `.github/**`, `.canopy/**`, `.claude/**` and similar) are
-protected by default, and so is removing lines from existing tests. A branch
-cannot lower the bar it is judged against.
+protected by default, and so is removing tests: deleting a test file, or
+lowering the number of test cases or of assertions in one, needs a person.
+Editing assertions without lowering the counts does not hold the landing; the
+record lists the file as `tests_modified` so a person can look. A branch cannot
+lower the bar it is judged against.
+
+### Contracts (0.3)
+
+A breaking change to shared code (a function removed, or given a required
+argument, that something else calls or reads) must come with a contract: a test
+file from the author's branch that fails on `main`'s current source.
+`canopy contract publish 'src/money.js#toCents' --test test/money.contract.test.js`
+runs that file against `main` in the landing sandbox and accepts it only if it
+fails there. Agents that read or use the symbol are then shown the new signature
+and a fenced excerpt of the test (400 characters at most). With
+`contracts.require_for_breaking` true in the rules, `canopy land` refuses a
+breaking change that has no accepted contract, and the contract test must pass
+on the merge commit. `canopy init` writes the key as true; a rules file without
+it behaves as 0.2. Node test files only in this step.
 
 ## People, owners and models
 

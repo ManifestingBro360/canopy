@@ -142,7 +142,7 @@ line that tells the receiving model it is data.
    scratch worktree, inside a sandbox. Only canopyd runs checks; a result
    reported by a client is never used.
 9. **Verdict.** `blocked` (checks, conflict, invalid rules), `needs-human`
-   (protected files, taint in a section that forbids it, reduced tests,
+   (protected files, taint in a section that forbids it, removed or reduced tests,
    coverage or size below the section's bar), or land.
 10. **Commit phase, one landing at a time.** If `main` moved while checks ran,
     the merge is rebuilt on the new `main` and the checks run again. A landing
@@ -313,6 +313,71 @@ Codex's `apply_patch` names its files inside the patch text; those paths are
 checked before the edit, and after any tool the engine does not recognise the
 worktree is scanned as after a shell command. `canopy checkin` does the scan
 and returns notices for a harness with no hooks.
+
+## 12a. Contracts (0.3)
+
+A breaking change is a symbol removed, or one whose signature `paramDelta`
+reports as forcing callers to change (`isBreaking` in `src/engine.mjs`; an
+added optional argument is not). It is *shared* when something on `main`
+depends on it (the graph) or another worktree reads or references it
+(`Engine.isShared`).
+
+- **Author notice.** When `processWrite` first sees a breaking edit to shared
+  code and `contracts.require_for_breaking` is true, the author gets one notice
+  (kind `contract`) naming the exact `canopy contract publish` command. Nothing
+  is refused mid-task.
+- **Publish** (`Gate.publishContract`, `POST /api/contract/publish`). The
+  symbol must have a breaking write recorded in the worktree. The test path must
+  stay inside the worktree (links resolved), look like a test file, end in
+  `.js`, `.mjs` or `.cjs` and contain a test case. canopyd copies the file into a
+  scratch checkout of `main` and runs `node --test --test-reporter=tap <file>`
+  in the sandbox. The file is opened without following links or blocking and
+  its size is taken from the open file (a pipe or huge file is refused); its
+  resolved name must be plain (`[\w./@-]`), and the id stored is that of the bytes
+  that were run. Before running, every relative import must exist on `main`, the
+  test must import the file that defines the symbol and use its name. Exit 1
+  with a failed test case is accepted; 0 is refused ("passes on main proves
+  nothing"); a failure of the file itself (import, syntax or top-level error) or
+  anything not clearly a test failure is refused. Symbol names and test paths
+  are fenced in every message, and a name too odd to paste into a shell never
+  appears in a command. The accepted contract
+  (symbol, new signature, test path, blob id, a 400-character excerpt) goes in
+  the `contracts` table and is announced to every affected worktree.
+- **Caller notice.** `changeText` appends the contract to the change notice:
+  new signature, excerpt of the test, and when to adapt (now, if building on the
+  author's branch; otherwise after `git merge main`). The signature and the
+  excerpt both go through `fence()` (the excerpt capped so the fenced text is
+  400 characters at most).
+- **Gate.** In `analyze`, each breaking write to shared code needs a contract
+  for this worktree whose signature still matches and whose test blob at the
+  candidate equals the published one; otherwise the landing is `blocked` with
+  the symbol and the publish command. The contract test is added to the checks,
+  so it has to pass on the merge commit. The record lists `contracts`. The key
+  comes from `main`'s rules like every other rule, so a branch cannot switch it
+  off; absent, it is off.
+- **Tests reduced, made precise.** For each test file that existed at the
+  merge base: deleted (and not renamed) holds; fewer test cases or fewer
+  assertions (comments stripped, so commenting out counts as removing) holds;
+  a test case whose name is no longer in the file holds (so does renaming one:
+  a person confirms it); a new `skip` or `todo` marker anywhere in the file
+  holds;
+  equal or higher counts do not hold and the file goes in `tests_modified` in
+  the record and the landing notification. A file whose layout the counter
+  cannot read (no recognised case or assertion) keeps the old rule: any removed
+  line holds.
+
+Counting ignores string and template literal contents and comments, constant
+assertions (`assert.ok(true)`, `assert.equal(1, 1)`, `assert.equal(x, x)`) and
+tests marked skip or todo. Renaming a test file to a name a runner will not
+pick up (for example `.disabled`) is a deletion. An optional argument inserted
+before existing ones, and a signature that cannot be read as a parameter list
+on shared code, are breaking; a change in types alone is not seen (out of scope
+in this step).
+
+Limits: Node test files only; the "fails on main" check cannot tell a test that
+fails because it pins the new behaviour from one that fails because it imports
+a file that exists only on the branch; a behaviour change with an unchanged
+signature is not a breaking change here.
 
 ## 12. Known limits
 

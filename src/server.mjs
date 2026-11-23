@@ -88,6 +88,7 @@ export async function serve({ cwd, port = Number(process.env.CANOPY_PORT) || 771
         if (url.pathname === '/api/state') return send(res, 200, engine.state(url.searchParams.get('rev')));
         if (url.pathname === '/api/file') return send(res, 200, engine.fileView(url.searchParams.get('path') || '') || { error: 'unknown file' });
         if (url.pathname === '/api/why') return send(res, 200, engine.why(url.searchParams.get('target') || ''));
+        if (url.pathname === '/api/contracts') return send(res, 200, gate.contracts());
         if (url.pathname === '/api/pending') return send(res, 200, gate.pending());
         if (url.pathname === '/api/whoami') return send(res, 200, { user: who.user, role: who.role, users: strict });
         if (url.pathname === '/api/environments') return send(res, 200, gate.environments());
@@ -146,6 +147,7 @@ export async function serve({ cwd, port = Number(process.env.CANOPY_PORT) || 771
           if (!approver.user && typeof body.token === 'string' && body.token.startsWith('cnp_')) approver = identify(store, { socket: req.socket, headers: { ...req.headers, authorization: 'Bearer ' + body.token } });
           return send(res, 200, await gate.approve(body.id, { who: approver, token: body.token, by: body.by }));
         }
+        if (url.pathname === '/api/contract/publish') { if (needUser()) return; return send(res, 200, await gate.publishContract({ cwd: body.cwd, node: body.node, test: body.test, who })); }
         if (url.pathname === '/api/concerns') return send(res, 200, gate.concerns(String(body.id || ''), { who }));
         if (url.pathname === '/api/promote') return send(res, 200, await gate.promote({ env: String(body.env || ''), commit: body.commit ? String(body.commit) : undefined, who }));
         if (url.pathname === '/api/checkin') { if (needUser()) return; return send(res, 200, await engine.checkin({ cwd: String(body.cwd || ''), model: body.model, harness: body.harness }, who)); }
