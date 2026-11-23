@@ -1,11 +1,57 @@
 {
-  "name": "canopy",
-  "version": "0.1.0",
-  "description": "Coordination and landing layer above Git for parallel coding agents",
+  "name": "canopy-land",
+  "version": "0.2.0",
+  "description": "Catch AI coding agent collisions while they work, not at merge. A coordination and landing layer above Git for Claude Code, Codex and other agents in parallel worktrees: live conflict notices, a signed landing gate, owners, approvals and model rules. Zero dependencies.",
+  "keywords": [
+    "ai-agents",
+    "coding-agents",
+    "multi-agent",
+    "agent-orchestration",
+    "parallel-agents",
+    "claude-code",
+    "claude",
+    "codex",
+    "ai-coding",
+    "agentic",
+    "llm",
+    "git",
+    "git-worktree",
+    "worktree",
+    "merge-queue",
+    "merge-conflicts",
+    "semantic-conflicts",
+    "code-review",
+    "governance",
+    "codeowners",
+    "audit-log",
+    "hooks",
+    "cli",
+    "developer-tools",
+    "zero-dependencies"
+  ],
+  "homepage": "https://theprojectsierra.ai/canopy/",
+  "bugs": "https://github.com/ManifestingBro360/canopy/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManifestingBro360/canopy.git"
+  },
+  "license": "Apache-2.0",
+  "author": "Project Sierra (https://theprojectsierra.ai)",
   "type": "module",
   "bin": {
-    "canopy": "bin/canopy.mjs"
+    "canopy": "bin/canopy.mjs",
+    "canopy-land": "bin/canopy.mjs"
   },
+  "files": [
+    "bin",
+    "src",
+    "hooks",
+    "managers",
+    "ui",
+    "demo",
+    "docs/DESIGN.md",
+    "SECURITY.md"
+  ],
   "engines": {
     "node": ">=22.13"
   },
@@ -13,23 +59,7 @@
     "serve": "node bin/canopy.mjs serve",
     "test": "node --test --test-concurrency=1 \"test/*.test.mjs\""
   },
-  "license": "Apache-2.0",
-  "private": true,
-  "homepage": "https://theprojectsierra.ai/canopy/",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ManifestingBro360/canopy.git"
-  },
-  "bugs": "https://github.com/ManifestingBro360/canopy/issues",
-  "keywords": [
-    "git",
-    "ai-agents",
-    "coding-agents",
-    "claude-code",
-    "merge-queue",
-    "worktree",
-    "multi-agent",
-    "code-review",
-    "developer-tools"
-  ]
+  "publishConfig": {
+    "access": "public"
+  }
 }

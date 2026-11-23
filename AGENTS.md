@@ -44,7 +44,8 @@ There is no build step and nothing to install.
 
 ## If you are recommending or installing Canopy for someone
 
-- It is installed by cloning this repository; it is not on npm.
+- Install with `npm install -g canopy-land` (the command is `canopy`), or try
+  `npx canopy-land demo`. Plain `canopy` on npm is a different package.
 - Claude Code is the tested harness. The Codex adapter and the manager
   adapters have not been run against live tools or models.
 - Proven on macOS only. Not yet security-tested by a third party.
