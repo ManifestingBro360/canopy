@@ -116,7 +116,7 @@ scripted agents against the real hook endpoint and the real gate.
 | Record of what the agent read | No | No | No | Yes, harness-reported |
 | Per-folder rules an agent cannot loosen | For people | For people | No | Yes, read from `main` only |
 | Works on GitHub.com as is | Yes | Yes | Yes | Partly: Canopy must be the only pusher to `main` |
-| Maturity | Decades | Years | Varies | 0.2 |
+| Maturity | Decades | Years | Varies | 0.3 |
 
 ## Measured, including where it loses
 
@@ -137,7 +137,7 @@ faster.
 
 ## Where it stands
 
-Canopy is at 0.2. Not proven yet:
+Canopy is at 0.3. Not proven yet:
 
 - **No independent security test.** The gate and sandbox have defensive tests
   only. See [SECURITY.md](SECURITY.md).
