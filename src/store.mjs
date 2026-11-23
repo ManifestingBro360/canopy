@@ -41,6 +41,7 @@ create table if not exists channels(name text primary key, url text, kind text, 
 create table if not exists notified(key text primary key, ts int);
 create table if not exists manager_notes(landing text primary key, summary text, findings text, ts int);
 create table if not exists known(worktree text, node text, hash text, ts int, primary key(worktree, node));
+create table if not exists contracts(node text, worktree text, branch text, kind text, sig_old text, sig text, test_path text, test_blob text, excerpt text, session text, ts int, primary key(node, worktree));
 create table if not exists audit(seq integer primary key, ts int, user text, ip text, action text, target text, detail text, hash text);
 `;
 // Columns added after 0.1. A database made by 0.1 gains them on first open.

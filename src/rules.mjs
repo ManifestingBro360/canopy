@@ -33,7 +33,7 @@ export function globMatch(glob, path) {
 const RULE_KEYS = new Set(['path', 'checks', 'perf', 'min_coverage', 'max_changed_lines', 'protected', 'no_tainted', 'no_unwitnessed',
   'owners', 'approvals', 'writers', 'guard_dependents', 'models']);
 const TOP_KEYS = new Set(['version', 'rules', 'protected_globs', 'setup', 'revalidate', 'check_timeout_ms', 'checks_network',
-  'teams', 'model_tiers', 'manager', 'advisories', 'environments', 'notify']);
+  'teams', 'model_tiers', 'manager', 'advisories', 'environments', 'notify', 'contracts']);
 const NOTIFY_KINDS = ['approval', 'security', 'blocked', 'landed', 'promotion'];
 const strList = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x.trim());
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -97,6 +97,12 @@ function problem(doc) {
     if (a.on_new !== undefined && !['note', 'review', 'block'].includes(a.on_new)) return 'advisories.on_new must be "note", "review" or "block"';
     if (a.on_unavailable !== undefined && !['note', 'review'].includes(a.on_unavailable)) return 'advisories.on_unavailable must be "note" or "review"';
   }
+  if (doc.contracts !== undefined) {
+    const c = doc.contracts;
+    if (!isObj(c)) return '"contracts" must be an object';
+    const bad = only(c, ['require_for_breaking'], 'contracts'); if (bad) return bad;
+    if (c.require_for_breaking !== undefined && typeof c.require_for_breaking !== 'boolean') return 'contracts.require_for_breaking must be true or false';
+  }
   if (doc.notify !== undefined) {
     if (!Array.isArray(doc.notify)) return '"notify" must be a list';
     for (const [i, n] of doc.notify.entries()) {
@@ -151,7 +157,7 @@ export function loadRules(repo, ref) {
   const text = showFile(repo, ref, '.canopy/rules.json');
   const hash = createHash('sha256').update(text || '').digest('hex').slice(0, 16);
   const out = { rules: [], protectedGlobs: [...DEFAULT_PROTECTED], setup: [], revalidate: 'always', checkTimeoutMs: 600_000, network: false, hash, error: null, present: text !== null,
-    teams: {}, manager: null, advisories: null, environments: [], notify: [] };
+    teams: {}, manager: null, advisories: null, environments: [], notify: [], contracts: { requireForBreaking: false } };
   if (text === null) return out;
   let doc, why = null;
   try { doc = JSON.parse(text); } catch (e) { why = 'it is not valid JSON (' + e.message + ')'; }
@@ -167,7 +173,7 @@ export function loadRules(repo, ref) {
     promoters: e.promoters ? expand(e.promoters, teams) : null, approvers: e.approvers ? expand(e.approvers, teams) : null, approvals: e.approvals || 0, checks: e.checks || [] }));
   return { ...out, rules, protectedGlobs: [...DEFAULT_PROTECTED, ...(doc.protected_globs || [])],
     setup: doc.setup || [], revalidate: doc.revalidate || 'always', checkTimeoutMs: doc.check_timeout_ms || 600_000, network: doc.checks_network === true,
-    teams, environments: envs,
+    teams, environments: envs, contracts: { requireForBreaking: !!(doc.contracts && doc.contracts.require_for_breaking === true) },
     notify: (doc.notify || []).map((n) => ({ channel: n.channel, on: n.on || ['approval', 'security', 'blocked'], paths: n.paths ? n.paths.map(normPath) : null })),
     manager: doc.manager ? { cmd: doc.manager.cmd, when: doc.manager.when || 'flagged', timeoutMs: doc.manager.timeout_ms || 180_000, onError: doc.manager.on_error || 'review' } : null,
     advisories: doc.advisories ? { source: 'osv', onNew: doc.advisories.on_new || 'review', onUnavailable: doc.advisories.on_unavailable || 'note' } : null };
