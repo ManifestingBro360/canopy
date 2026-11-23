@@ -100,16 +100,21 @@ export function testMarks(text, ext = 'js') {
   // it all show. Any other edit on that line shows too, which errs towards asking a person. A marker alone on a
   // line inside a multi-line call carries no name; moving that one between tests is not seen.
   const skips = new Map();
+  const DEF = /^\s*(?:export\s+)?(?:async\s+)?(?:def|class|fn|pub|func|function|public|private|protected|static|void|it|test|describe)\b/;
+  let from = 0, end = -1, key = ''; // the line the last marker was on: one key per line, so the work stays linear in the file
   for (const m of t.matchAll(SKIP_RE)) {
-    const from = t.lastIndexOf('\n', m.index) + 1;
-    let to = t.indexOf('\n', m.index + m[0].length); if (to < 0) to = t.length;
-    // A decorator or attribute stands on its own line: the test it applies to is on the next one.
-    // Past any further decorators and blank lines, up to and including the line that names the test.
-    if (/^\s*(?:@|#\[)/.test(t.slice(from, to))) {
-      while (to < t.length) { const nx = t.indexOf('\n', to + 1), end = nx < 0 ? t.length : nx, line = t.slice(to + 1, end); to = end; if (!/^\s*(?:(?:@|#\[).*)?$/.test(line)) break; }
+    if (m.index > end) {
+      from = t.lastIndexOf('\n', m.index) + 1; // scans back over this line once; later markers on it reuse the result
+      end = t.indexOf('\n', m.index); if (end < 0) end = t.length;
+      let to = end;
+      // A decorator or attribute: read on to the line that declares the test, through continuation lines (20 lines at most).
+      if (/^\s*(?:@|#\[)/.test(t.slice(from, Math.min(end, from + 200)))) {
+        for (let n = 0; n < 20 && to < t.length; n++) { const nx = t.indexOf('\n', to + 1), e2 = nx < 0 ? t.length : nx, line = t.slice(to + 1, Math.min(e2, to + 201)); to = e2; if (DEF.test(line)) break; }
+      }
+      key = t.slice(from, to).replace(/"S(\d+)"/g, (_, n) => JSON.stringify(lit(n))).replace(/\s+/g, ' ').trim();
+      if (key.length > 400) key = 'sha256:' + createHash('sha256').update(key).digest('hex'); // the whole text still decides the key
     }
-    const k = t.slice(from, to).replace(/"S(\d+)"/g, (_, n) => JSON.stringify(lit(n))).replace(/\s+/g, ' ').trim();
-    skips.set(k, (skips.get(k) || 0) + 1);
+    skips.set(key, (skips.get(key) || 0) + 1);
   }
   return { titles, skips };
 }
@@ -241,6 +246,7 @@ export class Gate {
       const newT = showFile(repo, C, moved ? moved.path : p);
       if (newT === null || (moved && !discoverable(moved.path))) { testReductions.push(p); continue; }
       if (typeof oldT !== 'string' || oldT === newT) continue;
+      if (newT.length > 2_000_000 || oldT.length > 2_000_000) { testReductions.push(p); continue; } // too large to read cheaply: a person looks
       const ext = (/\.(\w+)$/.exec(moved ? moved.path : p) || [])[1];
       const o = testStats(oldT, ext), n = testStats(newT, ext);
       if (!o.cases && !o.asserts) { if (Number(d) > 0) testReductions.push(p); continue; } // not a test layout we can count: any removed line holds

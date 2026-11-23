@@ -334,6 +334,13 @@ test('C-marks: a removed test name or a new skip is seen even when the counts ar
   assert.ok(fresh("it.skipIf(false)('a', () => {})", "it.skipIf(true)('a', () => {})"));
   assert.ok(fresh('@pytest.mark.skip\ndef test_a():\n    pass\ndef test_b():\n    pass\n', 'def test_a():\n    pass\n@pytest.mark.skip\ndef test_b():\n    pass\n', 'py'));
   assert.ok(fresh("test('a', { skip: true }, () => {});\ntest('b', () => {});", "test('a', () => {});\ntest('b', { skip: true }, () => {});"));
+  // Many markers on one very long line, and a long run of decorators, are read in bounded time.
+  const t0 = performance.now();
+  testMarks('x' + ".skip('a');".repeat(40000));
+  testMarks('@pytest.mark.skip\n'.repeat(40000) + 'def test_a():\n    pass\n', 'py');
+  assert.ok(performance.now() - t0 < 3000, 'took ' + Math.round(performance.now() - t0) + ' ms');
+  // A decorator whose arguments run over several lines still carries the test's name.
+  assert.ok(fresh('@pytest.mark.skip(\n    reason="x"\n)\ndef test_a():\n    pass\ndef test_b():\n    pass\n', 'def test_a():\n    pass\n@pytest.mark.skip(\n    reason="x"\n)\ndef test_b():\n    pass\n', 'py'));
   // Stacked decorators: the name of the test is still part of the key. A long line is keyed whole.
   assert.ok(fresh('@pytest.mark.skip\n@slow\ndef test_a():\n    pass\n@slow\ndef test_b():\n    pass\n', '@slow\ndef test_a():\n    pass\n@pytest.mark.skip\n@slow\ndef test_b():\n    pass\n', 'py'));
   const pad = ' '.repeat(500);
