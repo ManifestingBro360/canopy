@@ -9,7 +9,7 @@
 // - The signed record names the commit, its parents and its tree, so it cannot
 //   be replayed onto another history.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, lstatSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { homedir, tmpdir, platform } from 'node:os';
@@ -732,12 +732,12 @@ export class Gate {
     if (!abs.startsWith(root + '/')) return no(`${test} is outside this worktree. Put the test inside it and publish again.`);
     const rel = abs.slice(root.length + 1);
     if (!isTestFile(rel) || !/\.(m?js|cjs)$/.test(rel)) return no(`${rel} is not a test file this step can run. Contracts run Node test files: a name such as ${rel.replace(/(\.[a-z]+)?$/, '.test.js')}, in a test folder or ending .test.js.`);
-    let text;
-    try { text = readFileSync(abs, 'utf8'); } catch { return no(`${rel} could not be read. Write the test file first.`); }
-    if (text.length > 200_000) return no(`${rel} is larger than 200 KB; a contract test should be small.`);
+    let bytes, text;
+    try { bytes = readFileSync(abs); text = bytes.toString('utf8'); } catch { return no(`${rel} could not be read. Write the test file first.`); }
+    if (bytes.length > 200_000) return no(`${rel} is larger than 200 KB; a contract test should be small.`);
     if (!testStats(text).cases) return no(`${rel} contains no test case (a call to test( or it( ). Write one that pins the new behaviour.`);
-    const blob = tryGit(w.top, ['hash-object', '--', rel]);
-    if (!blob) return no(`could not read ${rel} from the worktree.`);
+    // The id of the exact bytes that will be run, taken from them, not from a second read of the file.
+    const blob = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
     // Run it on main's source, in a scratch checkout, in the sandbox.
     e.refresh();
     const rs = e.ruleset;
@@ -748,7 +748,11 @@ export class Gate {
     try {
       rmSync(tmp, { recursive: true, force: true }); mkdirSync(tmp, { recursive: true });
       mkdirSync(join(dir, rel, '..'), { recursive: true });
-      writeFileSync(join(dir, rel), text);
+      // A link in main's tree must not carry the write outside the scratch checkout.
+      const target = join(real(join(dir, rel, '..')), basename(rel));
+      let link = false; try { link = lstatSync(target).isSymbolicLink(); } catch { /* not there yet */ }
+      if (!target.startsWith(real(dir) + '/') || link) return no(`${rel} would follow a link in ${e.main} out of the scratch checkout. Use a different file name or folder.`);
+      writeFileSync(target, bytes);
       r = await run(testCommand(rel), dir, { home: this.home, common: e.common, network: rs.network, dir, tmp, port: this.port }, rs.checkTimeoutMs);
     } finally { this.release(dir); }
     if (r.code === 0) return no(`${rel} PASSES on ${e.main}'s current source, so it does not show that anything changed. A contract test must fail on the old code and pass on yours: assert the new behaviour (for example, that the new signature works and the old form is refused), run it on ${e.main} to see it fail, then publish again.`);
