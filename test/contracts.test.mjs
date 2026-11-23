@@ -327,8 +327,14 @@ test('C-marks: a removed test name or a new skip is seen even when the counts ar
   const s1 = "test.skip('a', () => {}); test('b', () => { assert.ok(v); });", s2 = "test('a', () => {}); test.skip('b', () => { assert.ok(v); });";
   assert.ok([...testMarks(s2).skips.keys()].some((k) => !testMarks(s1).skips.has(k)));
   // The same marker a second time is counted, not folded into the first.
-  const twice = testMarks("test.skip('a', () => {});\ntest.skip('a', () => {});").skips;
-  assert.deepEqual([...twice.values()], [2]);
+  const sum = (m) => [...m.values()].reduce((x, y) => x + y, 0);
+  assert.equal(sum(testMarks("test.skip('a', () => {});\n\ntest.skip('a', () => {});\n").skips), 2);
+  // A changed condition, a skip moved between Python tests, and an options skip moved between tests all make a new key.
+  const fresh = (a, b, ext) => [...testMarks(b, ext).skips].some(([k, c]) => c > (testMarks(a, ext).skips.get(k) || 0));
+  assert.ok(fresh("it.skipIf(false)('a', () => {})", "it.skipIf(true)('a', () => {})"));
+  assert.ok(fresh('@pytest.mark.skip\ndef test_a():\n    pass\ndef test_b():\n    pass\n', 'def test_a():\n    pass\n@pytest.mark.skip\ndef test_b():\n    pass\n', 'py'));
+  assert.ok(fresh("test('a', { skip: true }, () => {});\ntest('b', () => {});", "test('a', () => {});\ntest('b', { skip: true }, () => {});"));
+  assert.ok(!fresh("test.skip('a', () => {});", "test.skip('a', () => {});\ntest('new', () => { assert.ok(v); });"), 'an untouched skip is not new');
   for (const src of ["test.only('a', () => {})", "it.skipIf(c)('a', () => {})", "fit('a', () => {})", "test('a', { only: true }, () => {})", "const t = test.skip; t('a', () => {})"]) assert.equal(testMarks(src).skips.size, 1, src);
   assert.equal(testMarks('@pytest.mark.xfail\ndef test_a():\n    assert f()\n', 'py').skips.size, 1);
   assert.deepEqual([...testMarks('def test_refund():\n    assert f() == 2\n', 'py').titles], ['test_refund']);
