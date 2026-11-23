@@ -103,14 +103,6 @@ later and Git 2.38 or later.
 npx canopy-land demo
 ```
 
-If `canopy-land` is not on npm yet when you read this, run it from a clone:
-
-```bash
-git clone https://github.com/ManifestingBro360/canopy
-cd canopy
-node bin/canopy.mjs demo
-```
-
 Open http://127.0.0.1:7717. The demo generates a small repository and plays
 scripted agents against the real hook endpoint and the real gate.
 

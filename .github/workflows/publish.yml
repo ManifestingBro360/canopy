@@ -18,5 +18,11 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - run: npm install -g npm@latest
-      - run: npm test
-      - run: npm publish --provenance --access public
+      - id: have
+        run: |
+          v=$(node -p "require('./package.json').version")
+          if npm view "canopy-land@$v" version >/dev/null 2>&1; then echo "published=yes" >> "$GITHUB_OUTPUT"; echo "canopy-land@$v is already on npm; nothing to publish"; fi
+      - if: steps.have.outputs.published != 'yes'
+        run: npm test
+      - if: steps.have.outputs.published != 'yes'
+        run: npm publish --provenance --access public
