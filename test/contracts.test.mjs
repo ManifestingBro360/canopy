@@ -325,7 +325,10 @@ test('C-marks: a removed test name or a new skip is seen even when the counts ar
   assert.ok(!testMarks(hidden).titles.has('refund is exact'));
   // Moving a skip from one test to another keeps the number of markers and is still seen.
   const s1 = "test.skip('a', () => {}); test('b', () => { assert.ok(v); });", s2 = "test('a', () => {}); test.skip('b', () => { assert.ok(v); });";
-  assert.ok([...testMarks(s2).skips].some((k) => !testMarks(s1).skips.has(k)));
+  assert.ok([...testMarks(s2).skips.keys()].some((k) => !testMarks(s1).skips.has(k)));
+  // The same marker a second time is counted, not folded into the first.
+  const twice = testMarks("test.skip('a', () => {});\ntest.skip('a', () => {});").skips;
+  assert.deepEqual([...twice.values()], [2]);
   for (const src of ["test.only('a', () => {})", "it.skipIf(c)('a', () => {})", "fit('a', () => {})", "test('a', { only: true }, () => {})", "const t = test.skip; t('a', () => {})"]) assert.equal(testMarks(src).skips.size, 1, src);
   assert.equal(testMarks('@pytest.mark.xfail\ndef test_a():\n    assert f()\n', 'py').skips.size, 1);
   assert.deepEqual([...testMarks('def test_refund():\n    assert f() == 2\n', 'py').titles], ['test_refund']);

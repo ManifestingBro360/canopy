@@ -96,7 +96,7 @@ export function testMarks(text, ext = 'js') {
   const body = [...lits.keys()], lit = (k) => body[Number(k)] ?? '';
   const titles = new Set([...t.matchAll(TITLE_RE)].map((m) => (m[1] !== undefined ? lit(m[1]) : m[2] ?? m[3])));
   // Each marker with what follows it (the test's name, with literals put back), so moving a skip from one test to another shows.
-  const skips = new Set([...t.matchAll(SKIP_RE)].map((m) => t.slice(m.index, m.index + m[0].length + 60).replace(/"S(\d+)"/g, (_, k) => JSON.stringify(lit(k))).replace(/\s+/g, ' ').trim()));
+  const skips = new Map(); for (const k of [...t.matchAll(SKIP_RE)].map((m) => t.slice(m.index, m.index + m[0].length + 60).replace(/"S(\d+)"/g, (_, k) => JSON.stringify(lit(k))).replace(/\s+/g, ' ').trim())) skips.set(k, (skips.get(k) || 0) + 1);
   return { titles, skips };
 }
 // A path a test runner will pick up again; renaming a test file to anything else removes it.
@@ -231,7 +231,7 @@ export class Gate {
       const o = testStats(oldT, ext), n = testStats(newT, ext);
       if (!o.cases && !o.asserts) { if (Number(d) > 0) testReductions.push(p); continue; } // not a test layout we can count: any removed line holds
       const om = testMarks(oldT, ext), nm = testMarks(newT, ext);
-      if (n.cases < o.cases || n.asserts < o.asserts || [...nm.skips].some((k) => !om.skips.has(k)) || [...om.titles].some((t) => !nm.titles.has(t))) testReductions.push(p);
+      if (n.cases < o.cases || n.asserts < o.asserts || [...nm.skips].some(([k, c]) => c > (om.skips.get(k) || 0)) || [...om.titles].some((t) => !nm.titles.has(t))) testReductions.push(p);
       else testsModified.push(p);
     }
     const touched = new Set();
