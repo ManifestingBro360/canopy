@@ -100,7 +100,7 @@ export function testMarks(text, ext = 'js') {
   // it all show. Any other edit on that line shows too, which errs towards asking a person. A marker alone on a
   // line inside a multi-line call carries no name; moving that one between tests is not seen.
   const skips = new Map();
-  const DEF = /^\s*(?:export\s+)?(?:async\s+)?(?:def|class|fn|pub|func|function|public|private|protected|static|void|it|test|describe)\b/;
+  const DEF = /^\s*(?:export\s+)?(?:async\s+)?(?:def|class|fn|fun|pub|func|function|public|private|protected|static|void|it|test|describe)\b/;
   let from = 0, end = -1, key = ''; // the line the last marker was on: one key per line, so the work stays linear in the file
   for (const m of t.matchAll(SKIP_RE)) {
     // Where the marker itself starts: the pattern may have taken the character before it, which can be the line break.
@@ -115,8 +115,8 @@ export function testMarks(text, ext = 'js') {
         found = false;
         for (let n = 0; n < 20 && to < t.length && !found; n++) { const nx = t.indexOf('\n', to + 1), e2 = nx < 0 ? t.length : nx; found = DEF.test(t.slice(to + 1, e2).trimStart().slice(0, 40)); to = e2; }
       }
-      // No declaration within reach: a key that matches nothing in the old file, so a person looks.
-      if (!found) { key = 'undeclared:' + from; skips.set(key, (skips.get(key) || 0) + 1); continue; }
+      // No declaration within reach: keyed by the text itself, so only the very same lines in the old file match it.
+      if (!found) { key = 'undeclared:' + createHash('sha256').update(t.slice(from, to).replace(/"S(\d+)"/g, (_, n) => JSON.stringify(lit(n)))).digest('hex'); skips.set(key, (skips.get(key) || 0) + 1); continue; }
       key = t.slice(from, to).replace(/"S(\d+)"/g, (_, n) => JSON.stringify(lit(n))).replace(/\s+/g, ' ').trim();
       if (key.length > 400) key = 'sha256:' + createHash('sha256').update(key).digest('hex'); // the whole text still decides the key
     }
