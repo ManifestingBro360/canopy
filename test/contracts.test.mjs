@@ -334,6 +334,10 @@ test('C-marks: a removed test name or a new skip is seen even when the counts ar
   assert.ok(fresh("it.skipIf(false)('a', () => {})", "it.skipIf(true)('a', () => {})"));
   assert.ok(fresh('@pytest.mark.skip\ndef test_a():\n    pass\ndef test_b():\n    pass\n', 'def test_a():\n    pass\n@pytest.mark.skip\ndef test_b():\n    pass\n', 'py'));
   assert.ok(fresh("test('a', { skip: true }, () => {});\ntest('b', () => {});", "test('a', () => {});\ntest('b', { skip: true }, () => {});"));
+  // Stacked decorators: the name of the test is still part of the key. A long line is keyed whole.
+  assert.ok(fresh('@pytest.mark.skip\n@slow\ndef test_a():\n    pass\n@slow\ndef test_b():\n    pass\n', '@slow\ndef test_a():\n    pass\n@pytest.mark.skip\n@slow\ndef test_b():\n    pass\n', 'py'));
+  const pad = ' '.repeat(500);
+  assert.ok(fresh("test('a'," + pad + "{ skip: false }, () => {});", "test('a'," + pad + "{ skip: true }, () => {});"));
   assert.ok(!fresh("test.skip('a', () => {});", "test.skip('a', () => {});\ntest('new', () => { assert.ok(v); });"), 'an untouched skip is not new');
   for (const src of ["test.only('a', () => {})", "it.skipIf(c)('a', () => {})", "fit('a', () => {})", "test('a', { only: true }, () => {})", "const t = test.skip; t('a', () => {})"]) assert.equal(testMarks(src).skips.size, 1, src);
   assert.equal(testMarks('@pytest.mark.xfail\ndef test_a():\n    assert f()\n', 'py').skips.size, 1);

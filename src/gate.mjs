@@ -104,8 +104,11 @@ export function testMarks(text, ext = 'js') {
     const from = t.lastIndexOf('\n', m.index) + 1;
     let to = t.indexOf('\n', m.index + m[0].length); if (to < 0) to = t.length;
     // A decorator or attribute stands on its own line: the test it applies to is on the next one.
-    if (/^\s*(?:@|#\[)/.test(t.slice(from, to))) { const nx = t.indexOf('\n', to + 1); to = nx < 0 ? t.length : nx; }
-    const k = t.slice(from, Math.min(to, from + 400)).replace(/"S(\d+)"/g, (_, n) => JSON.stringify(lit(n))).replace(/\s+/g, ' ').trim();
+    // Past any further decorators and blank lines, up to and including the line that names the test.
+    if (/^\s*(?:@|#\[)/.test(t.slice(from, to))) {
+      while (to < t.length) { const nx = t.indexOf('\n', to + 1), end = nx < 0 ? t.length : nx, line = t.slice(to + 1, end); to = end; if (!/^\s*(?:(?:@|#\[).*)?$/.test(line)) break; }
+    }
+    const k = t.slice(from, to).replace(/"S(\d+)"/g, (_, n) => JSON.stringify(lit(n))).replace(/\s+/g, ' ').trim();
     skips.set(k, (skips.get(k) || 0) + 1);
   }
   return { titles, skips };
