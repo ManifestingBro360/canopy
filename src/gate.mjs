@@ -83,6 +83,16 @@ export function testStats(text, ext = 'js') {
   asserts += (t.match(ASSERT_OTHER) || []).length;
   return { cases, asserts };
 }
+// Two more ways to switch tests off without lowering the counts: remove a named
+// test while padding with another, or wrap tests in something skipped. So the
+// names of the old test cases must all still be there, and nothing new may be
+// marked skip or todo.
+const TITLE_RE = /(?:^|[^\w$.])(?:it|test|specify)(?:\.each)?\s*\(\s*(["'`])((?:\\.|(?!\1)[^\\\n])*)\1|^\s*(?:async\s+)?def (test\w*)|^\s*func (Test\w+)/gm;
+const SKIP_RE = /\.(?:skip|todo)\s*\(|\b(?:skip|todo)\s*:|(?:^|[^\w$.])(?:xit|xtest|xdescribe)\s*\(|@(?:pytest\.mark\.|unittest\.)skip|\bt\.Skip/g;
+export function testMarks(text, ext = 'js') {
+  const kept = scrub(String(text), ext, true);
+  return { titles: new Set([...kept.matchAll(TITLE_RE)].map((m) => m[2] ?? m[3] ?? m[4])), skips: (scrub(String(text), ext).match(SKIP_RE) || []).length };
+}
 // A path a test runner will pick up again; renaming a test file to anything else removes it.
 const discoverable = (p) => isTestFile(p) && /\.(m?js|cjs|jsx|tsx?|py|go|rb|java|php|cs|rs|kt)$/.test(p);
 export const SAFE_REL = /^(?!-)[\w./@-]+$/;
@@ -214,7 +224,8 @@ export class Gate {
       const ext = (/\.(\w+)$/.exec(moved ? moved.path : p) || [])[1];
       const o = testStats(oldT, ext), n = testStats(newT, ext);
       if (!o.cases && !o.asserts) { if (Number(d) > 0) testReductions.push(p); continue; } // not a test layout we can count: any removed line holds
-      if (n.cases < o.cases || n.asserts < o.asserts) testReductions.push(p);
+      const om = testMarks(oldT, ext), nm = testMarks(newT, ext);
+      if (n.cases < o.cases || n.asserts < o.asserts || nm.skips > om.skips || [...om.titles].some((t) => !nm.titles.has(t))) testReductions.push(p);
       else testsModified.push(p);
     }
     const touched = new Set();

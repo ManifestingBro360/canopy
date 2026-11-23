@@ -201,7 +201,7 @@ test('tests reduced: an edit that keeps the counts does not hold, and is recorde
 
 // ---- Review round: stricter contracts, counter, parameters ----------------------
 
-import { testStats } from '../src/gate.mjs';
+import { testStats, testMarks } from '../src/gate.mjs';
 import { isBreaking } from '../src/engine.mjs';
 import { spawnSync } from 'node:child_process';
 
@@ -309,3 +309,16 @@ test('7: odd symbol and path names are fenced in the refusal and never put in a 
   assert.ok(!/[\u0000-\u001f]/.test(why), 'no control characters'); assert.match(why, /«src\/it's {1,3}x\.js#odd»/);
   assert.ok(!why.includes("contract publish 'src/it's"), 'no command built from an odd name');
 }));
+
+test('C-marks: a removed test name or a new skip is seen even when the counts are padded', () => {
+  const old = "test('refund is exact', () => { assert.equal(f(1), 2); });\ntest('second', () => { assert.equal(g(), 1); });";
+  const padded = "test('second', () => { assert.equal(g(), 1); });\ntest('filler', () => { assert.equal(h(), 1); });";
+  assert.deepEqual(testStats(old), testStats(padded));
+  const o = testMarks(old), n = testMarks(padded);
+  assert.ok([...o.titles].some((t) => !n.titles.has(t)), 'the dropped name is noticed');
+  const wrapped = "describe.skip('all', () => {\n" + old + "\n});";
+  assert.deepEqual(testStats(old), testStats(wrapped));
+  assert.ok(testMarks(wrapped).skips > o.skips, 'the skipped group is noticed');
+  assert.equal(testMarks("test('a', () => { const s = 'x.skip( skip: '; assert.ok(v); });").skips, 0, 'text in a string is not a skip');
+  assert.deepEqual([...testMarks('def test_refund():\n    assert f() == 2\n', 'py').titles], ['test_refund']);
+});

@@ -358,6 +358,9 @@ depends on it (the graph) or another worktree reads or references it
 - **Tests reduced, made precise.** For each test file that existed at the
   merge base: deleted (and not renamed) holds; fewer test cases or fewer
   assertions (comments stripped, so commenting out counts as removing) holds;
+  a test case whose name is no longer in the file holds (so does renaming one:
+  a person confirms it); a new `skip` or `todo` marker anywhere in the file
+  holds;
   equal or higher counts do not hold and the file goes in `tests_modified` in
   the record and the landing notification. A file whose layout the counter
   cannot read (no recognised case or assertion) keeps the old rule: any removed
