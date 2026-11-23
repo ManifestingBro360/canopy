@@ -95,11 +95,17 @@ export function testMarks(text, ext = 'js') {
   const lits = new Map(), t = scrub(String(text), ext, false, lits);
   const body = [...lits.keys()], lit = (k) => body[Number(k)] ?? '';
   const titles = new Set([...t.matchAll(TITLE_RE)].map((m) => (m[1] !== undefined ? lit(m[1]) : m[2] ?? m[3])));
-  // Each marker with the name that follows it, counted, so moving a skip from one test to another, or repeating one, shows.
+  // Each marker is keyed by the whole line it sits on (and the next line, for a decorator), with literals put back:
+  // that holds the test's name and the marker's own argument, so moving a skip, changing its condition or repeating
+  // it all show. Any other edit on that line shows too, which errs towards asking a person. A marker alone on a
+  // line inside a multi-line call carries no name; moving that one between tests is not seen.
   const skips = new Map();
   for (const m of t.matchAll(SKIP_RE)) {
-    const near = /"S(\d+)"/.exec(t.slice(m.index, m.index + m[0].length + 60));
-    const k = m[0].replace(/\s+/g, '').replace(/^[^\w.@#]/, '') + ' ' + (near ? lit(near[1]) : '');
+    const from = t.lastIndexOf('\n', m.index) + 1;
+    let to = t.indexOf('\n', m.index + m[0].length); if (to < 0) to = t.length;
+    // A decorator or attribute stands on its own line: the test it applies to is on the next one.
+    if (/^\s*(?:@|#\[)/.test(t.slice(from, to))) { const nx = t.indexOf('\n', to + 1); to = nx < 0 ? t.length : nx; }
+    const k = t.slice(from, Math.min(to, from + 400)).replace(/"S(\d+)"/g, (_, n) => JSON.stringify(lit(n))).replace(/\s+/g, ' ').trim();
     skips.set(k, (skips.get(k) || 0) + 1);
   }
   return { titles, skips };
