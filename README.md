@@ -141,8 +141,11 @@ Canopy is at 0.3. Not proven yet:
 
 - **No independent security test.** The gate and sandbox have defensive tests
   only. See [SECURITY.md](SECURITY.md).
-- **No long run with real agents.** Real Claude Code sessions deliver their
-  start-up hooks; everything past that is tested with scripted agents.
+- **Only short runs with real agents.** Four trials with real Sonnet agents
+  ([docs/TRIALS.md](docs/TRIALS.md)): `main` passed its tests in all 18 states
+  under Canopy, and plain Git broke it in 1 of 4. Agents warned mid-task
+  adapted in only 1 of 8 cases, and only once a contract showed them what to
+  write. One small repository, minutes long, without Claude Code hooks.
 - **macOS only.** The Linux sandbox is written and has never been run.
 - **One machine is not a security boundary.** See "Trust model" below.
 
